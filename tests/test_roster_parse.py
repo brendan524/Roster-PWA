@@ -141,3 +141,11 @@ def test_staff_issues():
 def test_roster_months():
     assert roster_months(date(2026, 10, 14)) == ["2026-10", "2026-11"]
     assert roster_months(date(2026, 12, 31)) == ["2026-12", "2027-01"]
+
+
+def test_name_only_sheet_explains_staff_id_is_needed():
+    header = [h for h in HEADER if h != "Staff ID"]
+    shifts, issues = parse_tab("2026-10", [header, ["2026-10-19", "Sonya", "Gym", "Cardio", "05:45", "06:45"]])
+    assert shifts == []
+    [issue] = issues
+    assert "Missing required column(s): Staff ID" in issue.message and "not by name" in issue.message

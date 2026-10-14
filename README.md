@@ -18,7 +18,7 @@ hr.abgroup.au ─► Traefik (existing) ─► roster-app (FastAPI + PWA) ─►
 | Shifts | Google Sheet, one tab per month (`2026-10`, `2026-11`, …). The app reads this month's and next month's tabs. It never writes to the sheet. |
 | Staff, logins, PINs | Postgres. Loaded once from a CSV, then the database is the source of truth. |
 
-- **Login** uses email and password, and lets staff see their own roster on their phone. New staff get a temporary password and must change it the first time they log in. Five wrong attempts lock the account for 15 minutes.
+- **Login** uses **Staff ID** (e.g. `AB0010`) or email, plus a password, and lets staff see their own roster on their phone. New staff get a temporary password and must change it the first time they log in. Five wrong attempts lock the account for 15 minutes.
 - **PIN** is the clock-in credential, issued now and used from Stage 2. Each PIN is unique to one person, so a kiosk can tell who is clocking in from the PIN alone.
 - **Privacy:** `/api/roster/me` filters to the logged-in Staff ID on the server. Staff never receive anyone else's shifts or the sheet issues list. Tests enforce this.
 - **Fail loud:** if a sheet row has an unknown Staff ID, a bad date or time, or a missing field, that row shows up on the admin **Sheet issues** tab with its tab name and row number. It is never silently dropped.
@@ -45,6 +45,8 @@ hr.abgroup.au ─► Traefik (existing) ─► roster-app (FastAPI + PWA) ─►
 
 A month tab with no rows (or no rows for someone) shows **"No shifts scheduled yet"**. Examples are in `sample-roster/`.
 
+**Tip for whoever maintains the sheet:** add a `Staff` tab listing Staff ID and Name. Make the roster's `Staff ID` column a dropdown from that list (**Data → Data validation**), and fill `Staff Name` with a lookup, e.g. `=IFERROR(VLOOKUP(B2, Staff!A:B, 2, FALSE), "")`. Then nobody types IDs by hand, and the name shows who the ID belongs to.
+
 ## Deploying on the VPS
 
 1. **DNS:** point `hr.abgroup.au` (A record) at the VPS.
@@ -70,13 +72,16 @@ A month tab with no rows (or no rows for someone) shows **"No shifts scheduled y
    docker compose cp roster-app:/tmp/staff.credentials.csv .   # temporary passwords + PINs
    docker compose exec roster-app rm /tmp/staff.csv /tmp/staff.credentials.csv
    ```
-   Hand out the logins privately, then **delete `staff.credentials.csv`**. Columns: `staff_id, name, email, department, location_type (onshore|offshore), join_date, role (staff|admin)`, plus optional `password` and `pin`. If any row has a problem, nothing is imported and every error is listed. Re-running the import updates people by Staff ID and keeps their existing passwords and PINs.
+   Then make the admins: `docker compose exec roster-app python -m app.cli set-role AB0001 admin`.
+
+   Hand out the logins privately, then **delete `staff.credentials.csv`**. Required columns: `Staff ID`, `Name`, `Location Type` (Onshore/Offshore). Optional: `Email`, `Department`, `Join Date`, `Employment Status`, `Notes`, `Role` (staff/admin), `PIN`, `Password`. Headers are matched ignoring case and spacing, so the `AB-Staff-Seed.csv` layout works as-is. If any row has a problem, nothing is imported and every error is listed. Offshore staff without a join date are imported with a warning; they need one before leave accrual (Stage 3). Re-running the import updates people by Staff ID and keeps their existing passwords, PINs and roles.
 5. Open `https://hr.abgroup.au` on a phone, then use **Share → Add to Home Screen** (iOS) or **Install app** (Android).
 
 ### Admin commands
 
 ```bash
 docker compose exec roster-app python -m app.cli list-staff
+docker compose exec roster-app python -m app.cli set-role AB0004 admin    # or: ... set-role AB0004 staff
 docker compose exec roster-app python -m app.cli reset-password AB0003   # new temp password, logs them out everywhere
 docker compose exec roster-app python -m app.cli set-pin AB0003          # new random PIN (add --choose to type one)
 docker compose exec roster-app python -m app.cli deactivate AB0003       # can't log in; their shifts get flagged

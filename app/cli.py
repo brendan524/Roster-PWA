@@ -3,6 +3,7 @@
     docker compose exec roster-app python -m app.cli seed-staff /data/staff.csv
     docker compose exec roster-app python -m app.cli reset-password AB0003
     docker compose exec roster-app python -m app.cli set-pin AB0003
+    docker compose exec roster-app python -m app.cli set-role AB0001 admin
     docker compose exec roster-app python -m app.cli list-staff
 
 seed-staff is the ONE-TIME loader for the staff list (it's safe to re-run: it
@@ -30,8 +31,8 @@ from app.security import (
     validate_pin,
 )
 
-STAFF_COLUMNS = ["staff_id", "name", "email", "department", "location_type", "join_date", "role"]
-OPTIONAL_COLUMNS = ["password", "pin"]
+REQUIRED_COLUMNS = ["staff_id", "name", "location_type"]
+OPTIONAL_COLUMNS = ["email", "department", "join_date", "role", "employment_status", "notes", "password", "pin"]
 
 
 def _norm(h: str) -> str:
@@ -42,22 +43,24 @@ def seed_staff(path: str) -> int:
     with open(path, newline="", encoding="utf-8-sig") as fh:
         reader = csv.DictReader(fh)
         reader.fieldnames = [_norm(h) for h in reader.fieldnames or []]
-        missing = [c for c in STAFF_COLUMNS if c not in reader.fieldnames]
+        missing = [c for c in REQUIRED_COLUMNS if c not in reader.fieldnames]
         if missing:
             print(f"CSV is missing column(s): {', '.join(missing)}", file=sys.stderr)
             return 1
         rows = [r for r in reader if any((v or "").strip() for v in r.values())]
 
     errors: list[str] = []
+    warnings: list[str] = []
     seen_ids: set[str] = set()
     seen_emails: set[str] = set()
     seen_pins: set[str] = set()
     cleaned = []
     for n, r in enumerate(rows, start=2):
-        v = {k: (r.get(k) or "").strip() for k in STAFF_COLUMNS + OPTIONAL_COLUMNS}
+        v = {k: (r.get(k) or "").strip() for k in REQUIRED_COLUMNS + OPTIONAL_COLUMNS}
         v["staff_id"] = v["staff_id"].upper()
         v["email"] = v["email"].lower()
         v["location_type"] = v["location_type"].lower()
+        v["role_given"] = bool(v["role"])
         v["role"] = (v["role"] or "staff").lower()
 
         def err(msg: str) -> None:
@@ -70,11 +73,12 @@ def seed_staff(path: str) -> int:
         seen_ids.add(v["staff_id"])
         if not v["name"]:
             err("name is empty")
-        if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v["email"]):
-            err("email looks wrong")
-        if v["email"] in seen_emails:
-            err("duplicate email")
-        seen_emails.add(v["email"])
+        if v["email"]:
+            if not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", v["email"]):
+                err("email looks wrong")
+            if v["email"] in seen_emails:
+                err("duplicate email")
+            seen_emails.add(v["email"])
         if v["location_type"] not in ("onshore", "offshore"):
             err("location_type must be onshore or offshore")
         if v["role"] not in ("staff", "admin"):
@@ -86,7 +90,8 @@ def seed_staff(path: str) -> int:
             except CellError as e:
                 err(f"join_date: {e}")
         elif v["location_type"] == "offshore":
-            err("join_date is required for offshore staff (leave accrual)")
+            warnings.append(f"{v['staff_id']} ({v['name']}): no join_date — needed before offshore leave "
+                            "accrual (Stage 3) can run for them.")
         if v["password"] and (msg := validate_new_password(v["password"])):
             err(f"password: {msg}")
         if v["pin"]:
@@ -111,11 +116,17 @@ def seed_staff(path: str) -> int:
                 staff = Staff(staff_id=v["staff_id"], must_change_password=True, failed_logins=0, active=True)
                 db.add(staff)
             staff.name = v["name"]
-            staff.email = v["email"]
+            staff.email = v["email"] or None
             staff.department = v["department"]
             staff.location_type = v["location_type"]
             staff.join_date = join
-            staff.role = v["role"]
+            staff.employment_status = v["employment_status"]
+            staff.notes = v["notes"][:500]
+            # Role is only changed when the CSV has a role column value; set-role is the usual way.
+            if v["role_given"]:
+                staff.role = v["role"]
+            elif not staff.role:
+                staff.role = "staff"
 
             new_password = v["password"] or (None if staff.password_hash else generate_password())
             if new_password:
@@ -135,11 +146,13 @@ def seed_staff(path: str) -> int:
                 staff.pin_hash = pin_hash
                 db.flush()
             if new_password or new_pin:
-                issued.append({"staff_id": staff.staff_id, "name": staff.name, "email": staff.email,
+                issued.append({"staff_id": staff.staff_id, "name": staff.name, "login": staff.staff_id,
                                "temporary_password": new_password or "(unchanged)", "pin": new_pin or "(unchanged)"})
         db.commit()
 
     print(f"Imported {len(cleaned)} staff.")
+    for w in warnings:
+        print("  note: " + w)
     if issued:
         out = Path(path).with_suffix(".credentials.csv")
         with out.open("w", newline="") as fh:
@@ -209,11 +222,20 @@ def set_active(staff_id: str, active: bool) -> int:
     return 0
 
 
+def set_role(staff_id: str, role: str) -> int:
+    with SessionLocal() as db:
+        staff = _get(db, staff_id)
+        staff.role = role
+        db.commit()
+        print(f"{staff.name} ({staff.staff_id}) is now {role}.")
+    return 0
+
+
 def list_staff() -> int:
     with SessionLocal() as db:
         for s in db.query(Staff).order_by(Staff.staff_id):
             flags = [s.role, s.location_type] + ([] if s.active else ["INACTIVE"])
-            print(f"{s.staff_id:<10} {s.name:<24} {s.email:<32} {s.department:<12} {' '.join(flags)}")
+            print(f"{s.staff_id:<8} {s.name:<22} {s.email or '-':<28} {s.department:<20} {' '.join(flags)}")
     return 0
 
 
@@ -227,6 +249,9 @@ def main(argv: list[str] | None = None) -> int:
         sp.add_argument("--choose", action="store_true", help="type the value instead of generating one")
     sub.add_parser("deactivate").add_argument("staff_id")
     sub.add_parser("activate").add_argument("staff_id")
+    sr = sub.add_parser("set-role", help="make someone an admin, or back to staff")
+    sr.add_argument("staff_id")
+    sr.add_argument("role", choices=["admin", "staff"])
     sub.add_parser("list-staff")
     a = p.parse_args(argv)
 
@@ -236,6 +261,8 @@ def main(argv: list[str] | None = None) -> int:
         return reset_password(a.staff_id, a.choose)
     if a.cmd == "set-pin":
         return set_pin(a.staff_id, a.choose)
+    if a.cmd == "set-role":
+        return set_role(a.staff_id, a.role)
     if a.cmd in ("activate", "deactivate"):
         return set_active(a.staff_id, a.cmd == "activate")
     return list_staff()

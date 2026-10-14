@@ -1,4 +1,5 @@
 import os
+from pathlib import Path
 
 os.environ.setdefault("DATABASE_URL", os.environ.get(
     "TEST_DATABASE_URL", "postgresql+psycopg://roster:roster@localhost:5433/roster_test"))
@@ -10,7 +11,7 @@ import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
 from sqlalchemy import text  # noqa: E402
 
-from app.db import Base, SessionLocal, engine  # noqa: E402
+from app.db import SessionLocal, engine  # noqa: E402
 from app.deps import get_roster_service  # noqa: E402
 from app.main import app  # noqa: E402
 from app.models import Staff  # noqa: E402
@@ -20,9 +21,19 @@ from app.security import hash_password, hash_pin  # noqa: E402
 PASSWORD = "correct-horse-1"
 
 
+@pytest.fixture(scope="session", autouse=True)
+def migrated_db():
+    """Build the test schema from the real Alembic migrations, so they're tested too."""
+    from alembic import command
+    from alembic.config import Config
+
+    with engine.begin() as conn:
+        conn.execute(text("DROP SCHEMA public CASCADE; CREATE SCHEMA public"))
+    command.upgrade(Config(str(Path(__file__).resolve().parent.parent / "alembic.ini")), "head")
+
+
 @pytest.fixture(autouse=True)
-def clean_db():
-    Base.metadata.create_all(engine)
+def clean_db(migrated_db):
     with engine.begin() as conn:
         conn.execute(text("TRUNCATE auth_sessions, staff CASCADE"))
     yield
@@ -69,5 +80,5 @@ def client():
         yield c
 
 
-def login(client, email, password=PASSWORD):
-    return client.post("/api/auth/login", json={"email": email, "password": password})
+def login(client, ident, password=PASSWORD):
+    return client.post("/api/auth/login", json={"login": ident, "password": password})

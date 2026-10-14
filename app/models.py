@@ -14,10 +14,12 @@ class Staff(Base):
     # Roster join key, e.g. "AB0001". Always stored upper-case.
     staff_id: Mapped[str] = mapped_column(String(32), primary_key=True)
     name: Mapped[str] = mapped_column(String(120))
-    email: Mapped[str] = mapped_column(String(254), unique=True)  # stored lower-case
+    email: Mapped[str | None] = mapped_column(String(254), unique=True)  # optional; stored lower-case
     department: Mapped[str] = mapped_column(String(60), default="")
     location_type: Mapped[str] = mapped_column(String(10))  # "onshore" | "offshore"
     join_date: Mapped[date | None] = mapped_column(Date)
+    employment_status: Mapped[str] = mapped_column(String(40), default="")  # Director / Casual / Contract...
+    notes: Mapped[str] = mapped_column(String(500), default="")
     role: Mapped[str] = mapped_column(String(10), default="staff")  # "staff" | "admin"
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 

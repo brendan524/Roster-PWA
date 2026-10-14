@@ -20,11 +20,11 @@ from app.security import (
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
-BAD_LOGIN = "Email or password is incorrect."
+BAD_LOGIN = "Staff ID/email or password is incorrect."
 
 
 class LoginIn(BaseModel):
-    email: str
+    login: str  # Staff ID (e.g. AB0010) or email
     password: str
 
 
@@ -59,7 +59,11 @@ def _set_cookie(response: Response, token: str) -> None:
 @router.post("/login")
 def login(body: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
     s = get_settings()
-    staff = db.query(Staff).filter_by(email=body.email.strip().lower()).first()
+    ident = body.login.strip()
+    if "@" in ident:
+        staff = db.query(Staff).filter_by(email=ident.lower()).first()
+    else:
+        staff = db.get(Staff, ident.upper()) if ident else None
 
     if staff is not None and staff.locked_until and staff.locked_until > now():
         raise HTTPException(429, "Too many attempts. Try again in a few minutes.")

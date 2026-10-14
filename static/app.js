@@ -99,7 +99,8 @@ function render(...nodes) { app.replaceChildren(...nodes.flat().filter((n) => n 
 function renderLogin(message) {
   setChrome(false);
   const err = h("p", { class: "form-error", hidden: !message, role: "alert" }, message || "");
-  const email = h("input", { type: "email", id: "email", autocomplete: "username", required: true, inputmode: "email" });
+  const email = h("input", { type: "text", id: "email", autocomplete: "username", required: true,
+    autocapitalize: "none", autocorrect: "off", spellcheck: "false", placeholder: "e.g. AB0010" });
   const pw = h("input", { type: "password", id: "password", autocomplete: "current-password", required: true });
   const btn = h("button", { class: "btn", type: "submit" }, "Log in");
   const form = h("form", {
@@ -107,7 +108,7 @@ function renderLogin(message) {
       e.preventDefault();
       btn.disabled = true; err.hidden = true;
       try {
-        state.me = await api("/api/auth/login", { method: "POST", body: { email: email.value, password: pw.value } });
+        state.me = await api("/api/auth/login", { method: "POST", body: { login: email.value, password: pw.value } });
         await start();
       } catch (ex) {
         err.textContent = ex.message; err.hidden = false; btn.disabled = false; pw.value = ""; pw.focus();
@@ -116,7 +117,7 @@ function renderLogin(message) {
   },
     h("h1", {}, "Welcome"),
     h("p", { class: "sub" }, "Log in to see your shifts."),
-    h("label", { for: "email" }, "Email"), email,
+    h("label", { for: "email" }, "Staff ID or email"), email,
     h("label", { for: "password" }, "Password"), pw,
     err, btn,
     h("p", { class: "hint" }, "Forgotten your password? Ask Brendan or Dylan to reset it."),

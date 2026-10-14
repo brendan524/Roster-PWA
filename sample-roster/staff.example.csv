@@ -1,6 +1,6 @@
-staff_id,name,email,department,location_type,join_date,role
-AB0001,Brendan,brendan@example.com,First Aid,onshore,2018-01-01,admin
-AB0002,Aaron,aaron@example.com,First Aid,onshore,2019-03-01,staff
-AB0003,Sonya,sonya@example.com,Gym,onshore,2024-02-12,staff
-AB0004,Dylan,dylan@example.com,Gym,onshore,2021-06-01,admin
-AB0010,Maria Santos,maria@example.com,Offshore,offshore,2026-03-15,staff
+Staff ID,Name,Department,Location Type,Employment Status,Join Date,PIN,Notes
+AB0001,Brendan Example,Fitness & First Aid,Onshore,Director,,,Teaches both; dept set per shift on roster
+AB0002,Aaron Example,First Aid,Onshore,Contract,,,
+AB0003,Sonya Example,Fitness,Onshore,Casual,,,
+AB0004,Dylan Example,Fitness,Onshore,Part-time,,,
+AB0010,Maria Example,Offshore,Offshore,Contractor,2026-03-15,,

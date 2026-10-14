@@ -26,6 +26,12 @@ def test_login_and_me(client):
     assert client.get("/api/auth/me").json()["name"] == "Ab0003"
 
 
+def test_login_with_staff_id_any_case(client):
+    add_staff("AB0010", None)
+    r = login(client, " ab0010 ")
+    assert r.status_code == 200 and r.json()["staff_id"] == "AB0010"
+
+
 def test_wrong_password_and_unknown_email_look_the_same(client):
     add_staff("AB0003", "sonya@example.com")
     a = login(client, "sonya@example.com", "wrong-password")
@@ -55,7 +61,7 @@ def test_requires_login(client, source):
 def test_csrf_header_required_for_writes(source):
     add_staff("AB0003", "sonya@example.com")
     with TestClient(app) as bare:
-        r = bare.post("/api/auth/login", json={"email": "sonya@example.com", "password": "correct-horse-1"})
+        r = bare.post("/api/auth/login", json={"login": "sonya@example.com", "password": "correct-horse-1"})
         assert r.status_code == 403
 
 

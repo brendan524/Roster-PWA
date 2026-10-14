@@ -219,13 +219,14 @@ def _text(value: Any) -> str:
 # ---- tab parsing -----------------------------------------------------------
 
 def _find_header(rows: list[list[Any]]) -> tuple[int, dict[str, int]] | None:
+    """The header is the first row with a Date column and at least two other known columns."""
     for idx, row in enumerate(rows[:HEADER_SEARCH_ROWS]):
         mapping: dict[str, int] = {}
         for col, cell in enumerate(row):
             key = _ALIAS_LOOKUP.get(_norm_header(cell))
             if key and key not in mapping:
                 mapping[key] = col
-        if "date" in mapping and "staff_id" in mapping:
+        if "date" in mapping and len(mapping) >= 3:
             return idx, mapping
     return None
 
@@ -241,14 +242,16 @@ def parse_tab(tab: str, rows: list[list[Any]]) -> tuple[list[Shift], list[Issue]
     found = _find_header(rows)
     if found is None:
         issues.append(Issue("error", tab, None,
-                            "Couldn't find the header row (needs at least 'Date' and 'Staff ID' "
-                            f"columns in the first {HEADER_SEARCH_ROWS} rows). No shifts read from this tab."))
+                            "Couldn't find the header row (needs 'Date', 'Staff ID', 'Shift Start' and "
+                            f"'Shift End' columns in the first {HEADER_SEARCH_ROWS} rows). No shifts read from this tab."))
         return shifts, issues
     header_idx, cols = found
     missing = [COLUMN_LABELS[c] for c in REQUIRED_COLUMNS if c not in cols]
     if missing:
-        issues.append(Issue("error", tab, header_idx + 1,
-                            f"Missing required column(s): {', '.join(missing)}. No shifts read from this tab."))
+        msg = f"Missing required column(s): {', '.join(missing)}. No shifts read from this tab."
+        if "staff_id" not in cols and "staff_name" in cols:
+            msg += " Shifts are matched by Staff ID (e.g. AB0010), not by name — add a Staff ID column."
+        issues.append(Issue("error", tab, header_idx + 1, msg))
         return shifts, issues
 
     try:
