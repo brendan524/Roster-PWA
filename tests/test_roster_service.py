@@ -96,14 +96,55 @@ class FakeHttp:
         return FakeResp({"sheets": [{"properties": {"title": "2026-10 "}}, {"properties": {"title": "Template"}}]})
 
 
-def test_google_source_reads_existing_tabs_and_reports_missing():
+def test_google_source_lists_and_reads_tabs():
     from app.roster import GoogleSheetsSource
 
     src = GoogleSheetsSource("sheet123", "/nonexistent.json")
     http = FakeHttp()
     src._session = http
-    out = src.read_tabs(["2026-10", "2026-11"])
-    assert out == {"2026-10": [["Date"], [46323]], "2026-11": None}
+    assert src.tab_titles() == ["2026-10 ", "Template"]
+    assert src.read_tabs(["2026-10 "]) == {"2026-10 ": [["Date"], [46323]]}
     _, params = http.calls[1]
-    assert params["ranges"] == ["'2026-10 '"]  # exact title (stray space tolerated), quoted
+    assert params["ranges"] == ["'2026-10 '"]  # exact title, quoted
     assert params["valueRenderOption"] == "UNFORMATTED_VALUE"
+    assert src.read_tabs([]) == {}
+
+
+@pytest.mark.parametrize("title,month", [
+    ("2026-10", "2026-10"), ("10/2026", "2026-10"), (" 1/2027 ", "2027-01"),
+    ("13/2026", None), ("Copy of AB-Roster-Flat-Template", None), ("Oct 2026", None),
+])
+def test_month_of_title(title, month):
+    from app.roster import month_of_title
+
+    assert month_of_title(title) == month
+
+
+def test_reads_mm_yyyy_tab_names_like_the_template():
+    src = FakeSource({"10/2026": [HEADER, ["2026-10-28", "AB0010", "Sonya", "Fitness", "Cardio", "05:45", "06:45"]],
+                      "11/2026": [HEADER], "Copy of AB-Roster-Flat-Template": [HEADER]})
+    snap = make(src, [datetime(2026, 10, 15, tzinfo=TZ)]).get()
+    assert [(m.name, m.exists) for m in snap.months] == [("2026-10", True), ("2026-11", True)]
+    assert len(snap.shifts) == 1 and snap.issues == []
+
+
+def test_two_tabs_for_the_same_month_is_an_error():
+    src = FakeSource({"10/2026": [HEADER], "2026-10": [HEADER]})
+    snap = make(src, [datetime(2026, 10, 15, tzinfo=TZ)]).get()
+    assert snap.months[0].exists is False
+    assert "More than one tab for 2026-10" in snap.issues[0].message
+
+
+def test_wrong_month_rows_flagged_with_real_tab_title():
+    src = FakeSource({"11/2026": [HEADER, ["2026-10-28", "AB0010", "Sonya", "Fitness", "Cardio", "05:45", "06:45"]]})
+    snap = make(src, [datetime(2026, 10, 15, tzinfo=TZ)]).get()
+    [w] = [i for i in snap.issues if i.level == "warning"]
+    assert w.tab == "11/2026" and "isn't in this tab's month" in w.message
+
+
+def test_same_shift_in_both_month_tabs_is_flagged():
+    row = ["2026-10-28", "AB0010", "Sonya", "Fitness", "Cardio", "05:45", "06:45"]
+    src = FakeSource({"10/2026": [HEADER, row], "11/2026": [HEADER, row]})
+    snap = make(src, [datetime(2026, 10, 15, tzinfo=TZ)]).get()
+    dup = [i for i in snap.issues if "staff will see it twice" in i.message]
+    assert len(dup) == 1 and dup[0].tab == "11/2026" and "10/2026 row 2" in dup[0].message

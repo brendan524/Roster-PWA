@@ -231,8 +231,12 @@ def _find_header(rows: list[list[Any]]) -> tuple[int, dict[str, int]] | None:
     return None
 
 
-def parse_tab(tab: str, rows: list[list[Any]]) -> tuple[list[Shift], list[Issue]]:
-    """Parse one month tab into shifts plus issues. Never raises on bad data."""
+def parse_tab(tab: str, rows: list[list[Any]], month: str | None = None) -> tuple[list[Shift], list[Issue]]:
+    """Parse one month tab into shifts plus issues. Never raises on bad data.
+
+    `tab` is the tab's title (used in issue messages); `month` is "YYYY-MM"
+    (worked out from the title if not given).
+    """
     shifts: list[Shift] = []
     issues: list[Issue] = []
 
@@ -254,10 +258,8 @@ def parse_tab(tab: str, rows: list[list[Any]]) -> tuple[list[Shift], list[Issue]
         issues.append(Issue("error", tab, header_idx + 1, msg))
         return shifts, issues
 
-    try:
-        tab_year, tab_month = map(int, tab.split("-"))
-    except ValueError:
-        tab_year = tab_month = None
+    month = month or month_of_title(tab)
+    tab_year, tab_month = map(int, month.split("-")) if month else (None, None)
 
     seen: dict[tuple[str, date, str], int] = {}
 
@@ -359,6 +361,8 @@ def staff_issues(shifts: list[Shift], known: dict[str, bool]) -> list[Issue]:
 
 
 # ---- month tabs ------------------------------------------------------------
+# A month's tab may be named "2026-10" or "10/2026" (either works; pick one and
+# stick to it). If a sheet has both for the same month, that's flagged as an error.
 
 def month_tab(d: date) -> str:
     return f"{d.year:04d}-{d.month:02d}"
@@ -369,11 +373,28 @@ def roster_months(today: date) -> list[str]:
     return [month_tab(today), month_tab(nxt)]
 
 
+def month_of_title(title: str) -> str | None:
+    """'2026-10' or '10/2026' (also '1/2027') -> '2026-10'; anything else -> None."""
+    t = title.strip()
+    m = re.fullmatch(r"(\d{4})-(\d{2})", t)
+    if m:
+        y, mo = int(m.group(1)), int(m.group(2))
+    else:
+        m = re.fullmatch(r"(\d{1,2})/(\d{4})", t)
+        if not m:
+            return None
+        mo, y = int(m.group(1)), int(m.group(2))
+    return f"{y:04d}-{mo:02d}" if 1 <= mo <= 12 else None
+
+
 # ---- sources ---------------------------------------------------------------
 
 class RosterSource(Protocol):
-    def read_tabs(self, names: list[str]) -> dict[str, list[list[Any]] | None]:
-        """Return rows for each requested tab, or None for a tab that doesn't exist."""
+    def tab_titles(self) -> list[str]:
+        """Names of all tabs in the roster sheet."""
+
+    def read_tabs(self, titles: list[str]) -> dict[str, list[list[Any]]]:
+        """Rows for each of the given (existing) tabs."""
 
 
 class GoogleSheetsSource:
@@ -398,21 +419,18 @@ class GoogleSheetsSource:
             self._session = AuthorizedSession(creds)
         return self._session
 
-    def read_tabs(self, names: list[str]) -> dict[str, list[list[Any]] | None]:
-        http = self._http()
-        meta = http.get(f"{self.API}/{self.sheet_id}", params={"fields": "sheets.properties.title"}, timeout=15)
+    def tab_titles(self) -> list[str]:
+        meta = self._http().get(f"{self.API}/{self.sheet_id}", params={"fields": "sheets.properties.title"}, timeout=15)
         meta.raise_for_status()
-        titles = {s["properties"]["title"].strip(): s["properties"]["title"] for s in meta.json().get("sheets", [])}
+        return [s["properties"]["title"] for s in meta.json().get("sheets", [])]
 
-        result: dict[str, list[list[Any]] | None] = {n: None for n in names}
-        present = [n for n in names if n in titles]
-        if not present:
-            return result
-        ranges = ["'" + titles[n].replace("'", "''") + "'" for n in present]
-        resp = http.get(
+    def read_tabs(self, titles: list[str]) -> dict[str, list[list[Any]]]:
+        if not titles:
+            return {}
+        resp = self._http().get(
             f"{self.API}/{self.sheet_id}/values:batchGet",
             params={
-                "ranges": ranges,
+                "ranges": ["'" + t.replace("'", "''") + "'" for t in titles],
                 "valueRenderOption": "UNFORMATTED_VALUE",
                 "dateTimeRenderOption": "SERIAL_NUMBER",
                 "majorDimension": "ROWS",
@@ -420,26 +438,24 @@ class GoogleSheetsSource:
             timeout=20,
         )
         resp.raise_for_status()
-        for name, vr in zip(present, resp.json().get("valueRanges", []), strict=True):
-            result[name] = vr.get("values", [])
-        return result
+        ranges = resp.json().get("valueRanges", [])
+        return {t: vr.get("values", []) for t, vr in zip(titles, ranges, strict=True)}
 
 
 class CsvDirectorySource:
-    """Local stand-in for the sheet: a folder of YYYY-MM.csv files. For dev and demos."""
+    """Local stand-in for the sheet: a folder of <tab>.csv files (e.g. 2026-10.csv). For dev and demos."""
 
     def __init__(self, directory: str):
         self.directory = Path(directory)
 
-    def read_tabs(self, names: list[str]) -> dict[str, list[list[Any]] | None]:
-        out: dict[str, list[list[Any]] | None] = {}
-        for name in names:
-            path = self.directory / f"{name}.csv"
-            if path.exists():
-                with path.open(newline="", encoding="utf-8-sig") as fh:
-                    out[name] = list(csv.reader(fh))
-            else:
-                out[name] = None
+    def tab_titles(self) -> list[str]:
+        return sorted(p.stem for p in self.directory.glob("*.csv"))
+
+    def read_tabs(self, titles: list[str]) -> dict[str, list[list[Any]]]:
+        out = {}
+        for t in titles:
+            with (self.directory / f"{t}.csv").open(newline="", encoding="utf-8-sig") as fh:
+                out[t] = list(csv.reader(fh))
         return out
 
 
@@ -484,7 +500,10 @@ class RosterService:
 
             self._last_attempt = now
             try:
-                tabs = self.source.read_tabs(months)
+                titles = self.source.tab_titles()
+                matches = {m: [t for t in titles if month_of_title(t) == m] for m in months}
+                wanted = [t for m in months if len(matches[m]) == 1 for t in matches[m]]
+                tabs = self.source.read_tabs(wanted)
             except Exception as exc:  # network, auth, quota...
                 log.exception("Roster refresh failed")
                 if snap is None:
@@ -496,16 +515,33 @@ class RosterService:
             month_tabs: list[MonthTab] = []
             issues: list[Issue] = []
             for name in months:
-                rows = tabs.get(name)
-                if rows is None:
+                found = matches[name]
+                if len(found) > 1:
+                    month_tabs.append(MonthTab(name, exists=False))
+                    issues.append(Issue("error", found[0], None,
+                                        f"More than one tab for {name}: {', '.join(repr(t) for t in found)}. "
+                                        "Delete or rename the extras — no shifts read for this month."))
+                    continue
+                if not found:
                     month_tabs.append(MonthTab(name, exists=False))
                     if name == months[0]:
                         issues.append(Issue("error", name, None,
-                                            f"There's no '{name}' tab in the roster sheet for the current month."))
+                                            f"There's no tab for the current month (name it '{name}' "
+                                            f"or '{int(name[5:])}/{name[:4]}')."))
                     continue
-                shifts, tab_issues = parse_tab(name, rows)
+                shifts, tab_issues = parse_tab(found[0], tabs[found[0]], month=name)
                 month_tabs.append(MonthTab(name, exists=True, shifts=shifts))
                 issues.extend(tab_issues)
+
+            # The same shift in both month tabs would show twice — flag the second copy.
+            seen: dict[tuple[str, date, str], Shift] = {}
+            for shift in (sh for mt in month_tabs for sh in mt.shifts):
+                key = (shift.staff_id, shift.date, shift.start)
+                first = seen.setdefault(key, shift)
+                if first is not shift and first.tab != shift.tab:
+                    issues.append(Issue("warning", shift.tab, shift.row,
+                                        f"Same shift is also in tab {first.tab} row {first.row} — "
+                                        "staff will see it twice.", shift.staff_id))
 
             self._snapshot = RosterSnapshot(month_tabs, issues, now)
             return self._snapshot

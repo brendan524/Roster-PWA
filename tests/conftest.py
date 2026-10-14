@@ -40,16 +40,21 @@ def clean_db(migrated_db):
 
 
 class FakeSource:
+    """In-memory roster sheet: {tab title: rows}."""
+
     def __init__(self, tabs=None):
         self.tabs = tabs or {}
         self.calls = 0
         self.fail = False
 
-    def read_tabs(self, names):
+    def tab_titles(self):
         self.calls += 1
         if self.fail:
             raise ConnectionError("sheet down")
-        return {n: self.tabs.get(n) for n in names}
+        return [t for t, rows in self.tabs.items() if rows is not None]
+
+    def read_tabs(self, titles):
+        return {t: self.tabs[t] for t in titles}
 
 
 HEADER = ["Date", "Staff ID", "Staff Name", "Department", "Class / Role", "Shift Start", "Shift End",

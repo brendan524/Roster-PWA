@@ -15,7 +15,7 @@ hr.abgroup.au ─► Traefik (existing) ─► roster-app (FastAPI + PWA) ─►
 
 | Thing | Where it lives |
 |---|---|
-| Shifts | Google Sheet, one tab per month (`2026-10`, `2026-11`, …). The app reads this month's and next month's tabs. It never writes to the sheet. |
+| Shifts | Google Sheet, one tab per month (`10/2026` or `2026-10`). The app reads this month's and next month's tabs. It never writes to the sheet. |
 | Staff, logins, PINs | Postgres. Loaded once from a CSV, then the database is the source of truth. |
 
 - **Login** uses **Staff ID** (e.g. `AB0010`) or email, plus a password, and lets staff see their own roster on their phone. New staff get a temporary password and must change it the first time they log in. Five wrong attempts lock the account for 15 minutes.
@@ -26,7 +26,8 @@ hr.abgroup.au ─► Traefik (existing) ─► roster-app (FastAPI + PWA) ─►
 
 ## The roster sheet
 
-- **One tab per month**, named exactly `YYYY-MM` (for example `2026-10`). Copy each new month from a template tab so the names and columns stay consistent.
+- **One tab per month**, named `MM/YYYY` (e.g. `10/2026`) or `YYYY-MM` (e.g. `2026-10`). Pick one style and stick to it. Two tabs for the same month are flagged and neither is read. Other tabs (e.g. a `Template` tab) are ignored. Copy each new month from the template tab so the columns stay consistent.
+- Each shift goes in **its own month's tab only**. A row dated outside its tab's month, or the same shift in both tabs, is flagged on Sheet issues.
 - **Row 1 is the header row** (one or two title rows above it are fine). **Column order doesn't matter.** The app matches columns by header name.
 
 | Column | Required | Accepted values |
