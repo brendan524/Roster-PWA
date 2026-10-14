@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en-AU">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>AB Group</title>
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="AB Group">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <link rel="manifest" href="/manifest.webmanifest">
+  <link rel="icon" href="/icons/favicon-32.png" sizes="32x32">
+  <link rel="apple-touch-icon" href="/icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="/app.css">
+  <script src="/app.js" defer></script>
+</head>
+<body>
+  <header class="topbar">
+    <div class="brand">
+      <span class="logo" aria-hidden="true">AB<i></i></span>
+      <span class="brand-name">AB Group</span>
+    </div>
+    <div class="topbar-right" id="userbox" hidden>
+      <span id="username"></span>
+      <button class="link-btn" id="logout">Log out</button>
+    </div>
+  </header>
+
+  <div id="banner" class="banner" hidden></div>
+
+  <main id="app" aria-live="polite">
+    <p class="loading">Loading…</p>
+  </main>
+
+  <nav class="tabbar" id="tabbar" hidden></nav>
+
+  <noscript><p class="loading">AB Group needs JavaScript turned on.</p></noscript>
+</body>
+</html>

@@ -1,0 +1,68 @@
+# AB Group staff app (roster PWA) — runs behind the existing Traefik on the VPS.
+#
+#   cp .env.example .env        # fill in from Passbolt
+#   mkdir -p secrets && cp <key>.json secrets/google-service-account.json
+#   docker compose up -d --build
+#
+# The app joins the shared `n8n_default` network so Traefik can route to it.
+# The database sits on a private internal network and is never exposed.
+
+services:
+  roster-app:
+    build: .
+    image: ab-roster-app:latest
+    restart: unless-stopped
+    depends_on:
+      roster-db:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgresql+psycopg://roster:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@roster-db:5432/roster
+      PIN_PEPPER: ${PIN_PEPPER:?set PIN_PEPPER in .env}
+      PIN_LENGTH: ${PIN_LENGTH:-6}
+      TIMEZONE: ${TIMEZONE:-Australia/Melbourne}
+      ROSTER_SOURCE: google
+      ROSTER_SHEET_ID: ${ROSTER_SHEET_ID:?set ROSTER_SHEET_ID in .env}
+      GOOGLE_SERVICE_ACCOUNT_FILE: /run/secrets/google-service-account.json
+      COOKIE_SECURE: "true"
+    volumes:
+      - ./secrets/google-service-account.json:/run/secrets/google-service-account.json:ro
+    networks:
+      - n8n_default
+      - roster_internal
+    labels:
+      - traefik.enable=true
+      - traefik.docker.network=n8n_default
+      - traefik.http.routers.ab-roster.rule=Host(`${APP_DOMAIN:?set APP_DOMAIN in .env}`)
+      - traefik.http.routers.ab-roster.entrypoints=websecure
+      - traefik.http.routers.ab-roster.tls=true
+      - traefik.http.routers.ab-roster.tls.certresolver=mytlschallenge
+      - traefik.http.services.ab-roster.loadbalancer.server.port=8000
+      - traefik.http.middlewares.ab-roster-hsts.headers.stsSeconds=31536000
+      - traefik.http.middlewares.ab-roster-hsts.headers.stsIncludeSubdomains=true
+      - traefik.http.routers.ab-roster.middlewares=ab-roster-hsts
+
+  roster-db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: roster
+      POSTGRES_DB: roster
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - roster_pgdata:/var/lib/postgresql/data
+    networks:
+      - roster_internal
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U roster -d roster"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  roster_pgdata:
+
+networks:
+  n8n_default:
+    external: true
+  roster_internal:
+    internal: true

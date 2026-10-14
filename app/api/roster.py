@@ -1,0 +1,72 @@
+from fastapi import APIRouter, Depends, HTTPException
+from sqlalchemy.orm import Session
+
+from app.db import get_db
+from app.deps import admin_staff, get_roster_service, ready_staff
+from app.models import Staff
+from app.roster import RosterService, RosterSnapshot, RosterUnavailable, staff_issues
+
+router = APIRouter(prefix="/api", tags=["roster"])
+
+
+def _snapshot(service: RosterService, force: bool = False) -> RosterSnapshot:
+    try:
+        return service.get(force=force)
+    except RosterUnavailable as exc:
+        raise HTTPException(503, str(exc)) from exc
+
+
+def _meta(service: RosterService, snap: RosterSnapshot) -> dict:
+    return {
+        "today": service.today().isoformat(),
+        "fetched_at": snap.fetched_at.isoformat(),
+        "stale": snap.error is not None,
+    }
+
+
+@router.get("/roster/me")
+def my_roster(
+    refresh: bool = False,
+    staff: Staff = Depends(ready_staff),
+    service: RosterService = Depends(get_roster_service),
+):
+    """The logged-in person's own shifts ONLY. Never include other staff or sheet issues here."""
+    snap = _snapshot(service, force=refresh)
+    return {
+        **_meta(service, snap),
+        "months": [
+            {
+                "month": m.name,
+                "published": m.exists,
+                "shifts": [s.to_dict() for s in m.shifts if s.staff_id == staff.staff_id],
+            }
+            for m in snap.months
+        ],
+    }
+
+
+@router.get("/admin/roster")
+def all_roster(
+    refresh: bool = False,
+    _: Staff = Depends(admin_staff),
+    db: Session = Depends(get_db),
+    service: RosterService = Depends(get_roster_service),
+):
+    snap = _snapshot(service, force=refresh)
+    staff_rows = db.query(Staff).all()
+    known = {s.staff_id: s.active for s in staff_rows}
+    issues = snap.issues + staff_issues(snap.shifts, known)
+    issues.sort(key=lambda i: (i.level != "error", i.tab, i.row or 0))
+    return {
+        **_meta(service, snap),
+        "refresh_error": snap.error,
+        "months": [
+            {"month": m.name, "published": m.exists, "shifts": [s.to_dict() | {"row": s.row} for s in m.shifts]}
+            for m in snap.months
+        ],
+        "issues": [i.to_dict() for i in issues],
+        "staff": [
+            {"staff_id": s.staff_id, "name": s.name, "department": s.department, "active": s.active}
+            for s in sorted(staff_rows, key=lambda s: s.name.lower())
+        ],
+    }
