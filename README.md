@@ -74,7 +74,7 @@ A month tab with no rows (or no rows for someone) shows **"No shifts scheduled y
    docker compose cp staff.csv roster-app:/tmp/staff.csv
    docker compose exec roster-app python -m app.cli seed-staff /tmp/staff.csv
    docker compose cp roster-app:/tmp/staff.credentials.csv .   # temporary passwords + PINs
-   docker compose exec roster-app rm /tmp/staff.csv /tmp/staff.credentials.csv
+   docker compose exec -u root roster-app rm -f /tmp/staff.csv /tmp/staff.credentials.csv
    ```
    Then make the admins (Brendan, Aaron, Dylan):
    ```bash
