@@ -29,7 +29,6 @@ const state = {
   leaveMsg: null,
   xero: null,         // /api/admin/xero/status (admins)
   avail: null,        // /api/availability/me
-  availEditWeek: false,
   availDateOpen: false,
   availMsg: null,
   teamView: "roster", // roster | availability (admin Team tab)
@@ -443,26 +442,18 @@ function renderMine() {
 
 // ---------- availability ----------
 
-const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
-
 function fmtWindow(start, end) { return start ? `${fmtTime(start)} – ${fmtTime(end)}` : "all day"; }
 
 function fmtDateRange(a, b) { return a === b ? fmtDay(a) : `${fmtDay(a)} – ${fmtDay(b)}`; }
 
-function weekSummary(weekly) {
-  const off = weekly.filter((d) => d.mode !== "available");
-  if (!off.length) return "Available every day";
-  return off.map((d) => `${d.day.slice(0, 3)} ${d.mode === "all_day" ? "all day" : fmtWindow(d.start, d.end)}`).join(" · ");
-}
-
 function availabilitySection() {
   const A = state.avail;
-  if (!A) return null;
+  if (!A || !A.applies) return null;  // only casual/contract staff; everyone else applies for leave
   const rerender = () => renderMine();
   const reload = async () => { state.avail = await api("/api/availability/me"); rerender(); };
   return h("section", { class: "avail" },
     h("h2", { class: "month-title" }, "My availability"),
-    h("p", { class: "hint" }, `When you can't work, so the roster can be planned around it. Times are ${A.tz_label}.`),
+    h("p", { class: "hint" }, `Let us know the days or times you can't work, so the roster can be planned around them. Times are ${A.tz_label}.`),
     A.clashes.length ? h("div", { class: "clash" },
       h("b", {}, "You're rostered at times you said you can't work:"),
       h("ul", { class: "clash-ul" }, A.clashes.slice(0, state.availAllClashes ? 99 : 4).map((c) =>
@@ -472,12 +463,7 @@ function availabilitySection() {
       h("div", {}, "Please talk to Brendan or Aaron about these.")) : null,
     state.availMsg ? h("p", { class: "clock-msg ok", role: "status" }, state.availMsg) : null,
     h("div", { class: "card avail-card" },
-      h("div", { class: "row1" }, h("b", {}, "Every week"),
-        state.availEditWeek ? null : h("button", { class: "link-btn dark", onclick: () => { state.availEditWeek = true; state.availMsg = null; rerender(); } }, "Change")),
-      state.availEditWeek ? weekEditor(A, reload) : h("div", { class: "meta" }, weekSummary(A.weekly)),
-    ),
-    h("div", { class: "card avail-card" },
-      h("div", { class: "row1" }, h("b", {}, "Specific dates"),
+      h("div", { class: "row1" }, h("b", {}, "Days I can't work"),
         state.availDateOpen ? null : h("button", { class: "link-btn dark", onclick: () => { state.availDateOpen = true; state.availMsg = null; rerender(); } }, "Add")),
       state.availDateOpen ? dateEditor(A, reload) : null,
       A.dates.length ? h("ul", { class: "avail-dates" }, A.dates.map((d) => h("li", {},
@@ -488,42 +474,12 @@ function availabilitySection() {
           try { await api(`/api/availability/me/dates/${d.id}`, { method: "DELETE" }); state.availMsg = "Removed."; await reload(); }
           catch (ex) { alert(ex.message); }
         } }, "Remove"))))
-        : (state.availDateOpen ? null : h("div", { class: "meta" }, "None — add any days or times you can't work (e.g. holidays, appointments).")),
+        : (state.availDateOpen ? null : h("div", { class: "meta" }, "None — add any days or times you can't work (e.g. away, appointments, uni).")),
     ),
   );
 }
 
 function timeInput(value, label) { return h("input", { type: "time", value: value || "", "aria-label": label, step: "900" }); }
-
-function weekEditor(A, reload) {
-  const err = h("p", { class: "form-error", hidden: true, role: "alert" });
-  const rows = A.weekly.map((d) => {
-    const mode = h("select", { "aria-label": `${d.day} availability` },
-      h("option", { value: "available", selected: d.mode === "available" }, "Available"),
-      h("option", { value: "all_day", selected: d.mode === "all_day" }, "Can't work"),
-      h("option", { value: "window", selected: d.mode === "window" }, "Can't work between…"));
-    const from = timeInput(d.start, `${d.day} from`);
-    const to = timeInput(d.end, `${d.day} to`);
-    const times = h("div", { class: "avail-times", hidden: d.mode !== "window" }, from, h("span", {}, "to"), to);
-    mode.onchange = () => { times.hidden = mode.value !== "window"; };
-    return { d, mode, from, to, el: h("div", { class: "avail-day" }, h("span", { class: "avail-dname" }, d.day), mode, times) };
-  });
-  const save = h("button", { class: "btn", type: "submit" }, "Save my week");
-  return h("form", { class: "avail-form", onsubmit: async (e) => {
-    e.preventDefault(); err.hidden = true;
-    const days = rows.map((r) => ({ weekday: r.d.weekday, mode: r.mode.value,
-      start: r.mode.value === "window" ? r.from.value : null, end: r.mode.value === "window" ? r.to.value : null }));
-    const bad = rows.find((r) => r.mode.value === "window" && (!r.from.value || !r.to.value || r.from.value >= r.to.value));
-    if (bad) { err.textContent = `Check the times for ${bad.d.day}: the "to" time must be after the "from" time.`; err.hidden = false; return; }
-    save.disabled = true;
-    try {
-      await api("/api/availability/me/weekly", { method: "PUT", body: { days } });
-      state.availEditWeek = false; state.availMsg = "Saved."; await reload();
-    } catch (ex) { err.textContent = ex.message; err.hidden = false; save.disabled = false; }
-  } },
-  rows.map((r) => r.el), err, save,
-  h("button", { class: "link-btn dark", type: "button", onclick: () => { state.availEditWeek = false; renderMine(); } }, "Cancel"));
-}
 
 function dateEditor(A, reload) {
   const err = h("p", { class: "form-error", hidden: true, role: "alert" });
@@ -671,17 +627,17 @@ async function renderTeamAvailability(reload = false) {
       h("b", {}, `${fmtDay(c.date)} ${fmtTime(c.start)} – ${fmtTime(c.end)} · ${c.name}`),
       h("div", {}, c.reason))))
       : emptyCard("No clashes", "Nobody is rostered while unavailable or on leave."),
-    h("h2", { class: "month-title" }, "Everyone"),
+    h("h2", { class: "month-title" }, "Casual & contract staff"),
+    h("p", { class: "hint" }, "Days and times they've said they can't work. Everyone else applies for leave."),
     h("select", { "aria-label": "Staff member", onchange: (e) => { state.teamStaff = e.target.value; renderTeamAvailability(); } },
       h("option", { value: "" }, "Everyone"),
       A.staff.map((s) => h("option", { value: s.staff_id, selected: s.staff_id === state.teamStaff }, `${s.name} (${s.staff_id})`))),
     people.map((s) => h("article", { class: "leave-req" },
       h("div", { class: "row1" }, h("b", {}, s.name), h("span", { class: "meta" }, s.tz_label)),
-      h("div", { class: "meta" }, weekSummary(s.weekly) === "Available every day" ? "No regular days off" : `Every week: ${weekSummary(s.weekly)}`),
       s.dates.length ? h("ul", { class: "avail-dates" }, s.dates.map((d) => h("li", {},
         h("span", {}, h("b", {}, fmtDateRange(d.start_date, d.end_date)), ` · ${fmtWindow(d.start, d.end)}`,
           d.note ? h("span", { class: "meta" }, ` — ${d.note}`) : null,
-          d.new ? h("span", { class: "pill new" }, "New") : null)))) : null,
+          d.new ? h("span", { class: "pill new" }, "New") : null)))) : h("div", { class: "meta" }, "Nothing coming up"),
     )),
   );
 }
@@ -1237,7 +1193,7 @@ async function start() {
   state.roster = null; state.admin = null; state.tab = "mine"; state.clockData = null; state.clockDay = null;
   state.clock = null; state.clockMsg = null;
   state.leave = null; state.leaveAdmin = null; state.leaveFormOpen = false; state.leaveMsg = null;
-  state.avail = null; state.adminAvail = null; state.availEditWeek = false; state.availDateOpen = false; state.availMsg = null;
+  state.avail = null; state.adminAvail = null; state.availDateOpen = false; state.availMsg = null; state.availAllClashes = false;
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
   if (xeroReturn && state.me.role === "admin") {

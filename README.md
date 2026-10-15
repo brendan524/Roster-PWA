@@ -104,10 +104,11 @@ The access tokens are stored encrypted, using a key derived from `PIN_PEPPER`. T
 
 ## Availability
 
-On **My shifts**, everyone (contractors too) can set when they *can't* work: a regular week (e.g. never
-Mondays, or not 6–10am Wednesdays) and specific dates (all day or between two times). Offshore staff enter
-Philippines time; everyone else Melbourne time. Nobody approves it. Admins see it under **Team → Availability**,
-with a list of rostered shifts in the next 14 days that clash with someone's availability or leave.
+Casual and contract staff (onshore; "Casual"/"Contract" in the staff file, `set-leave … no`, or casual in Xero)
+see **My availability** at the bottom of My shifts, where they add specific days or times they can't work.
+Everyone else (part-time, full-time, offshore) applies for leave instead. Nobody approves availability.
+Admins see it under **Team → Availability**, with the rostered shifts in the next 14 days that clash with
+someone's availability or with approved/requested leave.
 
 ## Emails
 

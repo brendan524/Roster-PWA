@@ -1,7 +1,7 @@
-"""Availability: staff set when they can't work; admins see everyone's and the roster clashes."""
+"""Availability: casual/contract staff mark dates and times they can't work;
+admins see them and the roster clashes (including leave, for everyone)."""
 
 from datetime import date, datetime, time, timedelta
-from typing import Literal
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -11,8 +11,8 @@ from app import availability as av
 from app.config import get_settings
 from app.db import get_db
 from app.deps import admin_staff, get_roster_service, ready_staff
-from app.leave import ONSHORE_TYPES, OFFSHORE_TYPES
-from app.models import AvailabilityDate, AvailabilityWeekly, Staff
+from app.leave import OFFSHORE_TYPES, ONSHORE_TYPES
+from app.models import AvailabilityDate, Staff
 from app.roster import RosterService, RosterUnavailable
 
 router = APIRouter(prefix="/api", tags=["availability"])
@@ -46,53 +46,26 @@ def _shifts(service: RosterService) -> list:
         return []
 
 
+def _tz_label(staff: Staff) -> str:
+    return get_settings().offshore_timezone_label if staff.location_type == "offshore" else "Melbourne time"
+
+
 @router.get("/availability/me")
 def my_availability(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db),
                     service: RosterService = Depends(get_roster_service)):
+    if not av.applies_to(db, staff):
+        return {"applies": False}
     today = datetime.now(av.staff_tz(staff)).date()
-    weekly = db.query(AvailabilityWeekly).filter_by(staff_id=staff.staff_id).all()
-    start, end = today, today + timedelta(days=62)
-    mine = [s for s in _shifts(service) if s.staff_id == staff.staff_id]
-    st = get_settings()
+    mine = [s for s in _shifts(service) if s.staff_id == staff.staff_id]  # their own shifts only
     return {
+        "applies": True,
         "today": today.isoformat(),
-        "tz_label": st.offshore_timezone_label if staff.location_type == "offshore" else "Melbourne time",
-        "weekly": av.weekly_out(weekly),
+        "tz_label": _tz_label(staff),
         "dates": av.dates_out(av.upcoming_dates(db, staff.staff_id, today)),
-        # Their own shifts only (never anyone else's).
-        "clashes": [c.to_dict(staff.name) for c in av.clashes(db, mine, start, end, [staff.staff_id], LEAVE_LABELS)
-                    if c.kind in ("weekly", "date")],
+        "clashes": [c.to_dict(staff.name) for c in
+                    av.clashes(db, mine, today, today + timedelta(days=62), [staff.staff_id], LEAVE_LABELS)
+                    if c.kind == "date"],
     }
-
-
-class DayIn(BaseModel):
-    weekday: int = Field(ge=0, le=6)
-    mode: Literal["available", "all_day", "window"]
-    start: str | None = None
-    end: str | None = None
-
-
-class WeeklyIn(BaseModel):
-    days: list[DayIn] = Field(max_length=7)
-
-
-@router.put("/availability/me/weekly")
-def set_weekly(body: WeeklyIn, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db)):
-    if len({d.weekday for d in body.days}) != len(body.days):
-        raise HTTPException(400, "Each day can only appear once.")
-    rows = []
-    for d in body.days:
-        if d.mode == "available":
-            continue
-        s, e = _window(d.start, d.end) if d.mode == "window" else (None, None)
-        if d.mode == "window" and s is None:
-            raise HTTPException(400, f"Give the times you can't work on {av.DAYS[d.weekday]}.")
-        rows.append(AvailabilityWeekly(staff_id=staff.staff_id, weekday=d.weekday, start_time=s, end_time=e))
-    db.query(Staff).filter_by(staff_id=staff.staff_id).with_for_update().one()
-    db.query(AvailabilityWeekly).filter_by(staff_id=staff.staff_id).delete()
-    db.add_all(rows)
-    db.commit()
-    return {"weekly": av.weekly_out(rows)}
 
 
 class DatesIn(BaseModel):
@@ -105,6 +78,8 @@ class DatesIn(BaseModel):
 
 @router.post("/availability/me/dates")
 def add_dates(body: DatesIn, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db)):
+    if not av.applies_to(db, staff):
+        raise HTTPException(403, "Please apply for leave instead (Leave tab).")
     today = datetime.now(av.staff_tz(staff)).date()
     if body.end_date < body.start_date:
         raise HTTPException(400, "The end date is before the start date.")
@@ -135,9 +110,10 @@ def admin_availability(_: Staff = Depends(admin_staff), db: Session = Depends(ge
                        service: RosterService = Depends(get_roster_service)):
     today = service.today()
     start, end = av.horizon(today, CLASH_DAYS)
-    people = sorted(db.query(Staff).filter_by(active=True), key=lambda s: s.name.lower())
-    weekly, dates, _leave = av.load(db, None, today, today + timedelta(days=366))
-    names = {s.staff_id: s.name for s in people}
+    everyone = db.query(Staff).filter_by(active=True).all()
+    people = sorted((s for s in everyone if av.applies_to(db, s)), key=lambda s: s.name.lower())
+    dates, _leave = av.load(db, [s.staff_id for s in people], today, today + timedelta(days=366))
+    names = {s.staff_id: s.name for s in everyone}
     recent = datetime.now().astimezone() - timedelta(days=7)
     found = av.clashes(db, _shifts(service), start, end, None, LEAVE_LABELS)
     return {
@@ -145,10 +121,7 @@ def admin_availability(_: Staff = Depends(admin_staff), db: Session = Depends(ge
         "days": CLASH_DAYS,
         "clashes": [c.to_dict(names.get(c.shift.staff_id, c.shift.staff_name)) for c in found],
         "staff": [{
-            "staff_id": s.staff_id, "name": s.name,
-            "tz_label": get_settings().offshore_timezone_label if s.location_type == "offshore" else "Melbourne time",
-            "summary": av.summary_text(weekly.get(s.staff_id, [])),
-            "weekly": av.weekly_out(weekly.get(s.staff_id, [])),
+            "staff_id": s.staff_id, "name": s.name, "tz_label": _tz_label(s),
             "dates": [d | {"new": bool(d["created_at"]) and datetime.fromisoformat(d["created_at"]) >= recent}
                       for d in av.dates_out(dates.get(s.staff_id, []))],
         } for s in people],

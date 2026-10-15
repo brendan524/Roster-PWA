@@ -61,36 +61,59 @@ def set_email(staff_id, email):
 
 # ---- availability ----------------------------------------------------------------------
 
-def test_weekly_and_dates_and_own_clashes(client, source):
+def casual(staff_id, status="Casual"):
+    with SessionLocal() as db:
+        db.get(Staff, staff_id).employment_status = status
+        db.commit()
+
+
+def test_dates_and_own_clashes(client, source):
     add_staff("AB0010", None)
     add_staff("AB0011", None)
+    casual("AB0010")
     mon = next_weekday(0)
-    wed = next_weekday(2)
-    roster(source, (mon, "AB0010", "09:00", "12:00"), (wed, "AB0010", "13:00", "17:00"),
-           (wed + timedelta(days=1), "AB0010", "09:00", "10:00"), (mon, "AB0011", "09:00", "12:00"))
+    roster(source, (mon, "AB0010", "09:00", "12:00"), (mon + timedelta(days=1), "AB0010", "13:00", "17:00"),
+           (mon, "AB0011", "09:00", "12:00"))
     login(client, "AB0010")
-    r = client.put("/api/availability/me/weekly", json={"days": [
-        {"weekday": 0, "mode": "all_day"},
-        {"weekday": 2, "mode": "window", "start": "06:00", "end": "14:00"},
-    ]})
-    assert r.status_code == 200
-    thu = wed + timedelta(days=1)
-    r = client.post("/api/availability/me/dates", json={"start_date": thu.isoformat(), "end_date": thu.isoformat(),
-                                                        "start": "08:00", "end": "09:30", "note": "Dentist"})
-    assert r.status_code == 200
+    for body in ({"start_date": mon.isoformat(), "end_date": mon.isoformat(), "note": "Uni exam"},
+                 {"start_date": (mon + timedelta(days=1)).isoformat(), "end_date": (mon + timedelta(days=1)).isoformat(),
+                  "start": "08:00", "end": "12:30"}):  # finishes before the 1pm shift: no clash
+        assert client.post("/api/availability/me/dates", json=body).status_code == 200
     me = client.get("/api/availability/me").json()
-    assert [d["mode"] for d in me["weekly"]] == ["all_day", "available", "window", "available", "available", "available", "available"]
-    assert me["dates"][0]["note"] == "Dentist" and me["tz_label"] == "Melbourne time"
-    reasons = {c["date"]: c["reason"] for c in me["clashes"]}
-    assert reasons[mon.isoformat()] == "Not available Mondays (weekly)"
-    assert reasons[wed.isoformat()].startswith("Not available Wednesdays 6am–2pm")  # 13:00 shift overlaps
-    assert reasons[thu.isoformat()].startswith("Unavailable 8am–9:30am")
+    assert me["applies"] and me["tz_label"] == "Melbourne time" and len(me["dates"]) == 2
+    assert [(c["date"], c["reason"]) for c in me["clashes"]] == [(mon.isoformat(), "Unavailable all day — “Uni exam”")]
     assert all(c["staff_id"] == "AB0010" for c in me["clashes"])  # never anyone else's
+
+
+@pytest.mark.parametrize("status,has_leave,basis,location,applies", [
+    ("Casual", True, "", "onshore", True), ("Contract", True, "", "onshore", True), ("", False, "", "onshore", True),
+    ("Part-time", True, "", "onshore", False), ("", True, "CASUAL", "onshore", True), ("Director", True, "", "onshore", False),
+    ("Contractor", True, "", "offshore", False),
+])
+def test_who_sets_availability(client, source, status, has_leave, basis, location, applies):
+    from app import availability as av
+    from app.models import XeroEmployeeLink
+    add_staff("AB0010", None)
+    with SessionLocal() as db:
+        s = db.get(Staff, "AB0010")
+        s.employment_status, s.has_leave, s.location_type = status, has_leave, location
+        if basis:
+            db.add(XeroEmployeeLink(staff_id="AB0010", xero_employee_id="E1", linked_by="auto", employment_basis=basis))
+        db.commit()
+        assert av.applies_to(db, s) is applies
+    roster(source)
+    login(client, "AB0010")
+    assert client.get("/api/availability/me").json()["applies"] is applies
+    d = (today() + timedelta(days=2)).isoformat()
+    r = client.post("/api/availability/me/dates", json={"start_date": d, "end_date": d})
+    assert r.status_code == (200 if applies else 403)
 
 
 def test_availability_validation_and_ownership(client, source):
     add_staff("AB0010", None)
     add_staff("AB0011", None)
+    casual("AB0010")
+    casual("AB0011", "Contract")
     roster(source)
     login(client, "AB0011")
     d = (today() + timedelta(days=3)).isoformat()
@@ -105,7 +128,6 @@ def test_availability_validation_and_ownership(client, source):
     ]
     for body in bad:
         assert client.post("/api/availability/me/dates", json=body).status_code == 400
-    assert client.put("/api/availability/me/weekly", json={"days": [{"weekday": 1, "mode": "window"}]}).status_code == 400
     assert client.delete(f"/api/availability/me/dates/{other}").status_code == 404  # someone else's
     assert client.get("/api/admin/availability").status_code == 403
 
@@ -128,23 +150,7 @@ def test_admin_sees_everyone_and_leave_clashes(client, source):
         assert kinds[d1.isoformat()] == ("leave", "Approved annual leave")
     if d2 - today() < timedelta(days=14):
         assert kinds[d2.isoformat()] == ("leave_pending", "Requested personal / carer's leave")
-    assert {s["staff_id"] for s in a["staff"]} == {"AB0001", "AB0010"}
-
-
-def test_offshore_availability_is_in_philippines_time(client, source):
-    add_staff("AB0003", None)
-    with SessionLocal() as db:
-        db.get(Staff, "AB0003").location_type = "offshore"
-        db.commit()
-    tue = next_weekday(1)
-    # 9am–6pm Melbourne = 6am–3pm Manila (AEDT, Oct–Apr) or 7am–4pm (AEST).
-    roster(source, (tue, "AB0003", "09:00", "18:00"))
-    login(client, "AB0003")
-    client.put("/api/availability/me/weekly", json={"days": [{"weekday": 1, "mode": "window", "start": "17:00", "end": "23:00"}]})
-    me = client.get("/api/availability/me").json()
-    assert me["tz_label"] == "Philippines time" and me["clashes"] == []  # finishes before 5pm Manila
-    client.put("/api/availability/me/weekly", json={"days": [{"weekday": 1, "mode": "window", "start": "05:00", "end": "07:00"}]})
-    assert len(client.get("/api/availability/me").json()["clashes"]) == 1  # starts 6–7am Manila
+    assert a["staff"] == []  # part/full-time staff use leave; only casual/contract listed
 
 
 # ---- email ------------------------------------------------------------------------------
@@ -238,8 +244,8 @@ def test_daily_digest_once_and_only_when_needed(client, source, email_on):
     tomorrow = today() + timedelta(days=1)
     roster(source, (tomorrow, "AB0010", "09:00", "17:00"))
     with SessionLocal() as db:
-        from app.models import AvailabilityWeekly
-        db.add(AvailabilityWeekly(staff_id="AB0010", weekday=tomorrow.weekday()))
+        from app.models import AvailabilityDate
+        db.add(AvailabilityDate(staff_id="AB0010", start_date=tomorrow, end_date=tomorrow))
         db.commit()
         state.put(db, "digest_day", "")
         db.commit()
@@ -247,7 +253,7 @@ def test_daily_digest_once_and_only_when_needed(client, source, email_on):
         jobs.tick(db, service, now=at_local(9))  # same day: not again
     [(to, subject, body)] = outbox()
     assert to == "brendan@example.com" and "daily check" in subject
-    assert "Ab0010 — Not available" in body
+    assert "Ab0010 — Unavailable all day" in body
 
 
 def test_digest_lists_yesterdays_clock_problems(client, source, email_on):

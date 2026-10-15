@@ -225,21 +225,8 @@ class LeaveAttachment(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
-class AvailabilityWeekly(Base):
-    """A regular weekly time someone can't work. No start/end = the whole day."""
-
-    __tablename__ = "availability_weekly"
-
-    id: Mapped[int] = mapped_column(Integer, primary_key=True)
-    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.staff_id", ondelete="CASCADE"), index=True)
-    weekday: Mapped[int] = mapped_column(Integer)  # 0 = Monday ... 6 = Sunday
-    start_time: Mapped[time | None] = mapped_column(Time)
-    end_time: Mapped[time | None] = mapped_column(Time)
-    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
-
-
 class AvailabilityDate(Base):
-    """One-off dates someone can't work (each day in the range; optionally only between two times)."""
+    """Dates a casual/contractor can't work (each day in the range; optionally only between two times)."""
 
     __tablename__ = "availability_dates"
 
