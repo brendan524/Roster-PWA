@@ -166,3 +166,20 @@ def test_local_times_follow_melbourne_daylight_saving():
     assert local_times(shift("2026-06-15", "08:30", "17:30"), mel, mnl)["start"] == "06:30"
     # Early Melbourne start lands on the previous day in Manila
     assert local_times(shift("2026-10-20", "01:00", "09:00"), mel, mnl)["date"] == "2026-10-19"
+
+
+def test_issues_carry_the_name_from_the_row():
+    _, issues = parse_tab("2026-10", [HEADER, row(sid="")])
+    assert issues[0].staff_name == "Sonya" and "Staff ID is empty" in issues[0].message
+
+
+def test_unassigned_and_non_shift_rows_are_warnings_not_shifts():
+    unassigned = row(sid="")
+    unassigned[2] = "UNASSIGNED"
+    closed = ["2026-11-02", "", "—", "Fitness", "Gym closed (move)", "", "", "AB HQ", "", "", "CLOSED"]
+    shifts, issues = parse_tab("2026-11", [HEADER, unassigned, closed])
+    assert shifts == []
+    assert [(i.level, i.message) for i in issues] == [
+        ("warning", "No one rostered for this shift yet."),
+        ("warning", "Not a shift (no Staff ID or times), so it's ignored."),
+    ]

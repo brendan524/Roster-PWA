@@ -161,6 +161,7 @@ input:focus, select:focus, button:focus-visible { outline: 3px solid rgba(9,195,
 .issue .where { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: .5px; }
 .issue.error .lvl { color: var(--error); }
 .issue .lvl { font-weight: 900; color: var(--warn); }
+.issue .rows { font-size: 13px; color: var(--muted); margin-top: 4px; }
 .summary { display: flex; gap: 8px; margin-bottom: 14px; flex-wrap: wrap; }
 .summary span { font-size: 13px; font-weight: 700; padding: 6px 10px; border-radius: 999px; }
 .summary .e { background: var(--error-bg); color: var(--error); }

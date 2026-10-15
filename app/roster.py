@@ -40,6 +40,8 @@ COLUMN_ALIASES: dict[str, tuple[str, ...]] = {
     "notes": ("notes", "note", "comments"),
 }
 REQUIRED_COLUMNS = ("date", "staff_id", "start", "end")
+# Rows with one of these in Staff Name (and no Staff ID) are open shifts, not mistakes.
+UNASSIGNED_NAMES = {"UNASSIGNED", "TBA", "TBC", "OPEN"}
 COLUMN_LABELS = {
     "date": "Date",
     "staff_id": "Staff ID",
@@ -99,6 +101,7 @@ class Issue:
     row: int | None
     message: str
     staff_id: str | None = None
+    staff_name: str | None = None  # as written on the row, so admins can see whose it is
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -107,6 +110,7 @@ class Issue:
             "row": self.row,
             "message": self.message,
             "staff_id": self.staff_id,
+            "staff_name": self.staff_name,
         }
 
 
@@ -274,12 +278,22 @@ def parse_tab(tab: str, rows: list[list[Any]], month: str | None = None) -> tupl
             return row[col] if col is not None and col < len(row) else None
 
         staff_id = _text(cell("staff_id")).upper() or None
+        name = _text(cell("staff_name")) or None
+
+        if not staff_id and name and name.strip().upper() in UNASSIGNED_NAMES:
+            issues.append(Issue("warning", tab, rownum, "No one rostered for this shift yet.", None, name))
+            continue
+        if not staff_id and _is_blank(cell("start")) and _is_blank(cell("end")):
+            issues.append(Issue("warning", tab, rownum,
+                                "Not a shift (no Staff ID or times), so it's ignored.", None, name))
+            continue
+
         problems: list[str] = []
         for key in REQUIRED_COLUMNS:
             if _is_blank(cell(key)):
                 problems.append(f"{COLUMN_LABELS[key]} is empty")
         if problems:
-            issues.append(Issue("error", tab, rownum, "Shift not shown: " + "; ".join(problems) + ".", staff_id))
+            issues.append(Issue("error", tab, rownum, "Shift not shown: " + "; ".join(problems) + ".", staff_id, name))
             continue
 
         try:
@@ -289,11 +303,11 @@ def parse_tab(tab: str, rows: list[list[Any]], month: str | None = None) -> tupl
             scheduled = None if _is_blank(cell("scheduled_hours")) else parse_hours(cell("scheduled_hours"))
             teaching = None if _is_blank(cell("teaching_hours")) else parse_hours(cell("teaching_hours"))
         except CellError as exc:
-            issues.append(Issue("error", tab, rownum, f"Shift not shown: {exc}.", staff_id))
+            issues.append(Issue("error", tab, rownum, f"Shift not shown: {exc}.", staff_id, name))
             continue
 
         if start == end:
-            issues.append(Issue("error", tab, rownum, "Shift not shown: Shift Start and Shift End are the same.", staff_id))
+            issues.append(Issue("error", tab, rownum, "Shift not shown: Shift Start and Shift End are the same.", staff_id, name))
             continue
 
         warnings: list[str] = []
@@ -320,7 +334,7 @@ def parse_tab(tab: str, rows: list[list[Any]], month: str | None = None) -> tupl
             seen[key] = rownum
 
         for w in warnings:
-            issues.append(Issue("warning", tab, rownum, w, staff_id))
+            issues.append(Issue("warning", tab, rownum, w, staff_id, name))
 
         shifts.append(Shift(
             tab=tab,
@@ -364,10 +378,10 @@ def staff_issues(shifts: list[Shift], known: dict[str, bool]) -> list[Issue]:
     for s in shifts:
         if s.staff_id not in known:
             out.append(Issue("error", s.tab, s.row,
-                             f"Unknown Staff ID '{s.staff_id}' — nobody can see this shift.", s.staff_id))
+                             f"Unknown Staff ID '{s.staff_id}' — nobody can see this shift.", s.staff_id, s.staff_name or None))
         elif not known[s.staff_id]:
             out.append(Issue("warning", s.tab, s.row,
-                             f"Staff ID '{s.staff_id}' is marked inactive but has a shift.", s.staff_id))
+                             f"Staff ID '{s.staff_id}' is marked inactive but has a shift.", s.staff_id, s.staff_name or None))
     return out
 
 
@@ -552,7 +566,8 @@ class RosterService:
                 if first is not shift and first.tab != shift.tab:
                     issues.append(Issue("warning", shift.tab, shift.row,
                                         f"Same shift is also in tab {first.tab} row {first.row} — "
-                                        "staff will see it twice.", shift.staff_id))
+                                        "staff will see it twice.", shift.staff_id,
+                                        shift.staff_name or None))
 
             self._snapshot = RosterSnapshot(month_tabs, issues, now)
             return self._snapshot

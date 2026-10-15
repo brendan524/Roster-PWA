@@ -402,9 +402,26 @@ function renderIssues() {
   setBanner(a);
   const errors = a.issues.filter((i) => i.level === "error");
   const warnings = a.issues.filter((i) => i.level === "warning");
-  const list = a.issues.length ? a.issues.map((i) => h("article", { class: `issue ${i.level}` },
-    h("div", { class: "where" }, `Tab ${i.tab}${i.row ? ` · row ${i.row}` : ""}${i.staff_id ? ` · ${i.staff_id}` : ""}`),
-    h("div", {}, h("span", { class: "lvl" }, i.level === "error" ? "Not shown: " : "Check: "), i.message.replace(/^Shift not shown: /, "")),
+  // One card per person + problem, listing every row it affects, so 40 identical
+  // "Staff ID is empty" rows for one person become a single to-do.
+  const groups = new Map();
+  for (const i of a.issues) {
+    const msg = i.message.replace(/^Shift not shown: /, "");
+    const who = [i.staff_name, i.staff_id].filter(Boolean).join(" · ");
+    const key = `${i.level}|${who}|${msg}`;
+    if (!groups.has(key)) groups.set(key, { level: i.level, who, msg, rows: new Map(), count: 0 });
+    const g = groups.get(key);
+    g.count += 1;
+    if (!g.rows.has(i.tab)) g.rows.set(i.tab, []);
+    if (i.row) g.rows.get(i.tab).push(i.row);
+  }
+  const sorted = [...groups.values()].sort((x, y) =>
+    (x.level === "error" ? 0 : 1) - (y.level === "error" ? 0 : 1) || y.count - x.count);
+  const list = sorted.length ? sorted.map((g) => h("article", { class: `issue ${g.level}` },
+    h("div", { class: "where" }, g.who || "No name on row", g.count > 1 ? ` · ${g.count} rows` : ""),
+    h("div", {}, h("span", { class: "lvl" }, g.level === "error" ? "Not shown: " : "Check: "), g.msg),
+    h("div", { class: "rows" }, [...g.rows].map(([tab, rows]) =>
+      `Tab ${tab}${rows.length ? ` · row${rows.length > 1 ? "s" : ""} ${rows.join(", ")}` : ""}`).join("   ")),
   )) : [emptyCard("No problems found", "Every row in the roster sheet was read cleanly.")];
 
   render(
