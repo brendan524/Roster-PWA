@@ -140,6 +140,7 @@ crontab -l                               # confirm the line is there
 Check it's running: `tail /root/backups/ab-roster/backup.log`. Backups on the same server don't survive the server being lost, so also turn on Hostinger's VPS backups or snapshots, or copy the folder off-site.
 
 **Off-server copy (Google Shared Drive).** Each night's backup is also **encrypted** (AES-256, with a passphrase only you hold) and uploaded to a Shared drive. Copies are kept for 90 days, and the newest 7 are always kept. To set it up:
+1. In the Google Cloud project (`ab-roster`), enable the **Google Drive API**: APIs & Services → Library → Google Drive API → Enable.
 1. In Google Drive, go to **Shared drives → New**, e.g. "AB Roster Backups". Open **Manage members** and add `ab-roster-reader@ab-roster.iam.gserviceaccount.com` as **Content manager**.
 2. Copy the drive ID from its URL (`https://drive.google.com/drive/folders/<ID>`) and add `BACKUP_DRIVE_FOLDER_ID=<ID>` to `.env`.
 3. Create the passphrase: `openssl rand -base64 32 > secrets/backup-passphrase && chmod 600 secrets/backup-passphrase`. **Save it in Passbolt.** Without it the Drive copies can't be opened.
