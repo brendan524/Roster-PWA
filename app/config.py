@@ -18,7 +18,11 @@ class Settings(BaseSettings):
     pin_pepper: str = ""  # secret key for HMAC-hashing PINs. Must be set; never change after PINs are issued.
     cookie_secure: bool = True  # False only for local http development
     session_days: int = 30
-    timezone: str = "Australia/Melbourne"  # used to decide "current month" + "today"
+    # All roster sheet times are in this zone (offshore shifts included). Also decides "today".
+    timezone: str = "Australia/Melbourne"
+    # Offshore staff also see each shift converted to their local time.
+    offshore_timezone: str = "Asia/Manila"
+    offshore_timezone_label: str = "Philippines time"
 
     # Login protection
     max_failed_logins: int = 5

@@ -343,6 +343,17 @@ def parse_tab(tab: str, rows: list[list[Any]], month: str | None = None) -> tupl
     return shifts, issues
 
 
+def local_times(shift: Shift, sheet_tz: str, local_tz: str) -> dict[str, str]:
+    """The shift converted from the sheet's time zone to another zone (daylight saving aware)."""
+    src, dst = ZoneInfo(sheet_tz), ZoneInfo(local_tz)
+    start = datetime.combine(shift.date, time.fromisoformat(shift.start), src)
+    end_date = shift.date + timedelta(days=1 if shift.overnight else 0)
+    end = datetime.combine(end_date, time.fromisoformat(shift.end), src)
+    ls, le = start.astimezone(dst), end.astimezone(dst)
+    return {"date": ls.date().isoformat(), "start": f"{ls:%H:%M}", "end": f"{le:%H:%M}",
+            "end_next_day": le.date() > ls.date()}
+
+
 def staff_issues(shifts: list[Shift], known: dict[str, bool]) -> list[Issue]:
     """Issues that depend on the staff table: unknown or inactive Staff IDs.
 

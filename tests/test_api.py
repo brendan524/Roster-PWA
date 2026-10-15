@@ -144,3 +144,25 @@ def test_security_headers_and_static(client):
     assert r.status_code == 200
     assert "default-src 'self'" in r.headers["content-security-policy"]
     assert client.get("/api/auth/me").headers["cache-control"] == "no-store"
+
+
+def test_offshore_staff_also_get_philippines_time(client, source):
+    from app.db import SessionLocal
+    from app.models import Staff
+
+    add_staff("AB0003", None)
+    add_staff("AB0010", None)
+    with SessionLocal() as db:
+        db.get(Staff, "AB0003").location_type = "offshore"
+        db.commit()
+    source.tabs = tabs_with("AB0003", "AB0010")
+    login(client, "AB0003")
+    body = client.get("/api/roster/me").json()
+    [s] = body["months"][0]["shifts"]
+    assert s["start"] == "06:00" and s["local"]["start"] in ("03:00", "04:00")  # DST-dependent
+    assert body["local_tz_label"] == "Philippines time"
+
+    client.post("/api/auth/logout")
+    login(client, "AB0010")
+    body = client.get("/api/roster/me").json()
+    assert "local" not in body["months"][0]["shifts"][0] and body["local_tz_label"] is None

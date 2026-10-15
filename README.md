@@ -44,6 +44,8 @@ hr.abgroup.au ─► Traefik (existing) ─► roster-app (FastAPI + PWA) ─►
 | `Teaching Hours` | | First Aid only. Can't be more than Scheduled Hours. |
 | `Notes` | | Shown to the staff member. |
 
+**All times are Melbourne time**, including offshore shifts. Offshore staff also see each shift in Philippines time underneath, worked out for that date so daylight saving is handled.
+
 A month tab with no rows (or no rows for someone) shows **"No shifts scheduled yet"**. Examples are in `sample-roster/`.
 
 **Tip for whoever maintains the sheet:** add a `Staff` tab listing Staff ID and Name. Make the roster's `Staff ID` column a dropdown from that list (**Data → Data validation**), and fill `Staff Name` with a lookup, e.g. `=IFERROR(VLOOKUP(B2, Staff!A:B, 2, FALSE), "")`. Then nobody types IDs by hand, and the name shows who the ID belongs to.
@@ -73,7 +75,11 @@ A month tab with no rows (or no rows for someone) shows **"No shifts scheduled y
    docker compose cp roster-app:/tmp/staff.credentials.csv .   # temporary passwords + PINs
    docker compose exec roster-app rm /tmp/staff.csv /tmp/staff.credentials.csv
    ```
-   Then make the admins: `docker compose exec roster-app python -m app.cli set-role AB0001 admin`.
+   Then make the admins (Brendan, Aaron, Dylan):
+   ```bash
+   for id in AB0001 AB0002 AB0005; do docker compose exec roster-app python -m app.cli set-role $id admin; done
+   ```
+   (Or include a `Role` column with `admin` in the staff CSV.)
 
    Hand out the logins privately, then **delete `staff.credentials.csv`**. Required columns: `Staff ID`, `Name`, `Location Type` (Onshore/Offshore). Optional: `Email`, `Department`, `Join Date`, `Employment Status`, `Notes`, `Role` (staff/admin), `PIN`, `Password`. Headers are matched ignoring case and spacing, so the `AB-Staff-Seed.csv` layout works as-is. If any row has a problem, nothing is imported and every error is listed. Offshore staff without a join date are imported with a warning; they need one before leave accrual (Stage 3). Re-running the import updates people by Staff ID and keeps their existing passwords, PINs and roles.
 5. Open `https://hr.abgroup.au` on a phone, then use **Share → Add to Home Screen** (iOS) or **Install app** (Android).

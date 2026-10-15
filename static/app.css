@@ -114,6 +114,10 @@ input:focus, select:focus, button:focus-visible { outline: 3px solid rgba(9,195,
 .shift .time { font-weight: 900; font-size: 17px; }
 .shift .hrs { font-size: 13px; color: var(--muted); white-space: nowrap; }
 .shift .role { font-weight: 700; margin-top: 2px; }
+.shift .tz, .next .tz { font-size: 12px; font-weight: 700; color: var(--muted); }
+.next .tz { color: #B8C0C8; }
+.shift .localtime { font-size: 14px; font-weight: 700; color: var(--green-dark); margin-top: 1px; }
+.next .local { color: var(--green); font-weight: 700; margin-bottom: 2px; }
 .shift .meta { font-size: 14px; color: var(--muted); margin-top: 2px; }
 .shift .notes { font-size: 13px; margin-top: 6px; padding: 6px 8px; background: var(--bg); border-radius: 6px; }
 .shift .who { font-size: 13px; font-weight: 700; color: var(--blue-dark); }

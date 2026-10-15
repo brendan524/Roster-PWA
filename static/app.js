@@ -217,14 +217,24 @@ function shiftCard(s, { past = false, showWho = false } = {}) {
   return h("article", { class: `shift ${deptClass(s.department)} ${past ? "past" : ""}` },
     showWho ? h("div", { class: "who" }, s.staff_name || s.staff_id, " · ", s.staff_id) : null,
     h("div", { class: "row1" },
-      h("span", { class: "time" }, `${fmtTime(s.start)} – ${fmtTime(s.end)}`, s.overnight ? " (next day)" : ""),
+      h("span", { class: "time" }, `${fmtTime(s.start)} – ${fmtTime(s.end)}`, s.overnight ? " (next day)" : "",
+        s.local ? h("span", { class: "tz" }, " " + ((state.roster && state.roster.sheet_tz_label) || "")) : null),
       h("span", { class: "hrs" }, fmtHours(s.scheduled_hours),
         s.teaching_hours != null ? ` · ${fmtHours(s.teaching_hours)} teaching` : ""),
     ),
+    s.local ? h("div", { class: "localtime" }, localLine(s)) : null,
     s.role ? h("div", { class: "role" }, s.role) : null,
     meta.length ? h("div", { class: "meta" }, s.location || "", s.department ? h("span", { class: "chip" }, s.department) : null) : null,
     s.notes ? h("div", { class: "notes" }, s.notes) : null,
   );
+}
+
+// Offshore staff: the sheet's (Melbourne) times plus the same shift in their local time.
+function localLine(s) {
+  const r = state.roster || {};
+  const day = s.local.date !== s.date ? `${fmtDay(s.local.date)}, ` : "";
+  const next = s.local.end_next_day ? " (next day)" : "";
+  return `${day}${fmtTime(s.local.start)} – ${fmtTime(s.local.end)}${next} ${r.local_tz_label || "local time"}`;
 }
 
 function emptyCard(title, sub) {
@@ -254,7 +264,9 @@ function renderMine() {
 
   const nextCard = next ? h("section", { class: "next" },
     h("div", { class: "eyebrow" }, next.date === today ? "Today" : "Next shift"),
-    h("div", { class: "when" }, `${fmtDay(next.date)} · ${fmtTime(next.start)} – ${fmtTime(next.end)}`),
+    h("div", { class: "when" }, `${fmtDay(next.date)} · ${fmtTime(next.start)} – ${fmtTime(next.end)}`,
+      next.local ? h("span", { class: "tz" }, " " + (r.sheet_tz_label || "")) : null),
+    next.local ? h("div", { class: "local" }, localLine(next)) : null,
     h("div", { class: "what" }, [next.role, next.location].filter(Boolean).join(" · ")),
   ) : null;
 

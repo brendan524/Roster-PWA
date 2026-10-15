@@ -1,10 +1,11 @@
 from fastapi import APIRouter, Depends, HTTPException
 from sqlalchemy.orm import Session
 
+from app.config import get_settings
 from app.db import get_db
 from app.deps import admin_staff, get_roster_service, ready_staff
 from app.models import Staff
-from app.roster import RosterService, RosterSnapshot, RosterUnavailable, staff_issues
+from app.roster import RosterService, RosterSnapshot, RosterUnavailable, local_times, staff_issues
 
 router = APIRouter(prefix="/api", tags=["roster"])
 
@@ -32,13 +33,24 @@ def my_roster(
 ):
     """The logged-in person's own shifts ONLY. Never include other staff or sheet issues here."""
     snap = _snapshot(service, force=refresh)
+    settings = get_settings()
+    offshore = staff.location_type == "offshore"
+
+    def shift_out(s):
+        d = s.to_dict()
+        if offshore:
+            d["local"] = local_times(s, settings.timezone, settings.offshore_timezone)
+        return d
+
     return {
         **_meta(service, snap),
+        "sheet_tz_label": "Melbourne time" if settings.timezone == "Australia/Melbourne" else settings.timezone,
+        "local_tz_label": settings.offshore_timezone_label if offshore else None,
         "months": [
             {
                 "month": m.name,
                 "published": m.exists,
-                "shifts": [s.to_dict() for s in m.shifts if s.staff_id == staff.staff_id],
+                "shifts": [shift_out(s) for s in m.shifts if s.staff_id == staff.staff_id],
             }
             for m in snap.months
         ],

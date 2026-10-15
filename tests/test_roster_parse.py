@@ -149,3 +149,20 @@ def test_name_only_sheet_explains_staff_id_is_needed():
     assert shifts == []
     [issue] = issues
     assert "Missing required column(s): Staff ID" in issue.message and "not by name" in issue.message
+
+
+def test_local_times_follow_melbourne_daylight_saving():
+    from app.roster import local_times
+
+    def shift(d, start, end):
+        s, _ = parse_tab("2026-10", [HEADER, row(d=d, start=start, end=end, sched="")])
+        return s[0]
+
+    mel, mnl = "Australia/Melbourne", "Asia/Manila"
+    # October: Melbourne on daylight saving (UTC+11), Manila UTC+8 -> 3 hours behind
+    assert local_times(shift("2026-10-20", "08:30", "17:30"), mel, mnl) == {
+        "date": "2026-10-20", "start": "05:30", "end": "14:30", "end_next_day": False}
+    # June: Melbourne standard time (UTC+10) -> 2 hours behind
+    assert local_times(shift("2026-06-15", "08:30", "17:30"), mel, mnl)["start"] == "06:30"
+    # Early Melbourne start lands on the previous day in Manila
+    assert local_times(shift("2026-10-20", "01:00", "09:00"), mel, mnl)["date"] == "2026-10-19"
