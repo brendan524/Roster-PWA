@@ -190,6 +190,8 @@ function renderTabbar() {
   }, label, extra);
   const pendingLeave = state.leaveAdmin ? state.leaveAdmin.pending.length : 0;
   if (state.me.role !== "admin") {
+    // Contractors take no leave, so they only have their shifts (no tab bar needed).
+    if (state.me.has_leave === false) { tabbar.hidden = true; return; }
     tabbar.replaceChildren(tab("mine", "My shifts"), tab("leave", "Leave"));
     return;
   }
@@ -606,7 +608,8 @@ function xeroPanel(X) {
     X.staff.map((st) => h("div", { class: "xero-row" },
       h("div", {}, h("b", {}, st.name),
         st.balances.length ? h("div", { class: "meta" }, st.balances.map((b) => `${b.name}: ${fmtUnits(b.units, b.unit_type)}`).join(" · "))
-          : h("div", { class: "meta" }, st.link ? "No balances in Xero" : "Not linked — pick their Xero name")),
+          : h("div", { class: "meta" }, st.link ? "No balances in Xero" : "Not linked — pick their Xero name"),
+        st.link && st.link.start_date ? h("div", { class: "meta" }, `Started ${parseISO(st.link.start_date).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })} (long service shows to them after 7 years)`) : null),
       X.xero_employees.length ? h("select", { "aria-label": `Xero employee for ${st.name}`, onchange: async (e) => {
         try { await api("/api/admin/xero/link", { method: "POST", body: { staff_id: st.staff_id, xero_employee_id: e.target.value || null } });
           await api("/api/admin/xero/sync", { method: "POST" }).catch(() => {}); } catch (ex) { alert(ex.message); }
@@ -814,7 +817,8 @@ function renderLeave() {
   const upcoming = L.requests.filter((r) => r.end_date >= L.today || r.status === "pending");
   const past = L.requests.filter((r) => !upcoming.includes(r));
   let balanceBlock;
-  if (L.balances) balanceBlock = balanceCards(L.balances);
+  if (L.has_leave === false) balanceBlock = h("p", { class: "hint" }, "Contractors don't take leave through the app.");
+  else if (L.balances) balanceBlock = balanceCards(L.balances);
   else if (L.location_type === "offshore") balanceBlock = emptyCard("Balance not set up yet", "It'll show once your start date is added. You can still apply.");
   else if (L.xero_balances) balanceBlock = xeroBalanceCards(L.xero_balances);
   else balanceBlock = h("p", { class: "hint" }, "Your leave balances are kept in Xero. Ask Brendan or Aaron for your current balance.");
@@ -827,7 +831,7 @@ function renderLeave() {
     A ? h("h2", { class: "month-title" }, "My leave") : null,
     balanceBlock,
     state.leaveMsg ? h("p", { class: "clock-msg ok", role: "status" }, state.leaveMsg) : null,
-    state.leaveFormOpen ? leaveForm(L)
+    L.has_leave === false ? null : state.leaveFormOpen ? leaveForm(L)
       : h("button", { class: "btn", onclick: () => { state.leaveFormOpen = true; state.leaveMsg = null; renderLeave(); } }, "Apply for leave"),
     upcoming.length ? [h("h2", { class: "month-title" }, "Requests"), ...upcoming.map((r) => requestCard(r))] : null,
     past.length ? [h("h2", { class: "month-title" }, "Past"), ...past.slice(0, 10).map((r) => requestCard(r))] : null,

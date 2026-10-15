@@ -1,4 +1,4 @@
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from urllib.parse import parse_qs, urlparse
 
 import pytest
@@ -69,7 +69,7 @@ class FakeXero:
             return R(200, {"Employees": emps[(page - 1) * 100: page * 100]})
         eid = path.split("/")[1]
         e = self.employees[eid]
-        return R(200, {"Employees": [{"EmployeeID": eid, "LeaveBalances": [
+        return R(200, {"Employees": [{"EmployeeID": eid, "StartDate": e.get("start"), "LeaveBalances": [
             {"LeaveName": n, "LeaveTypeID": f"{eid}-{n}", "NumberOfUnits": u, "TypeOfUnits": "Hours"}
             for n, u in e["balances"].items()]}]})
 
@@ -81,7 +81,8 @@ def fake(monkeypatch):
     monkeypatch.setattr(s, "xero_client_secret", "secret")
     monkeypatch.setattr(s, "xero_redirect_uri", "https://hr.example/api/admin/xero/callback")
     f = FakeXero({
-        "E1": {"first": "Ab0010", "last": "", "balances": {"Annual Leave": 52.5, "Personal/Carer's Leave": 30.4}},
+        "E1": {"first": "Ab0010", "last": "", "start": "/Date(1704067200000+0000)/",  # 1 Jan 2024
+               "balances": {"Annual Leave": 52.5, "Personal/Carer's Leave": 30.4, "Long Service Leave": 40}},
         "E2": {"first": "Somebody", "last": "Else", "email": "jody@example.com", "balances": {"Annual Leave": 8}},
         "E3": {"first": "Twin", "last": "Name", "balances": {"Annual Leave": 1}},
         "E4": {"first": "Twin", "last": "Name", "balances": {"Annual Leave": 2}},
@@ -185,7 +186,9 @@ def test_staff_see_own_xero_balances_only(admin, fake):
     admin.post("/api/auth/logout")
     login(admin, "AB0010")
     me = admin.get("/api/leave/me").json()
+    # Long service is hidden until 7 years' service (started Jan 2024).
     assert {b["name"]: b["units"] for b in me["xero_balances"]} == {"Annual Leave": 52.5, "Personal/Carer's Leave": 30.4}
+    assert "long_service" not in [t["code"] for t in me["types"]]
     assert "Somebody" not in str(me)
     assert admin.get("/api/admin/xero/status").status_code == 403
     assert admin.get("/api/admin/xero/connect", follow_redirects=False).status_code == 403
@@ -216,3 +219,51 @@ def test_not_configured(client, source):
     login(client, "AB0001")
     assert client.get("/api/admin/xero/connect", follow_redirects=False).status_code == 400
     assert client.get("/api/admin/xero/status").json()["configured"] is False
+
+
+def test_long_service_hidden_until_seven_years(admin, fake):
+    connect(admin)
+    with SessionLocal() as db:
+        assert db.get(XeroEmployeeLink, "AB0010").start_date == date(2024, 1, 1)
+    row = next(s for s in admin.get("/api/admin/xero/status").json()["staff"] if s["staff_id"] == "AB0010")
+    assert "Long Service Leave" in [b["name"] for b in row["balances"]]  # admins always see it
+    admin.post("/api/auth/logout")
+    login(admin, "AB0010")
+    r = admin.post("/api/leave/requests", json={"leave_type": "long_service", "start_date": "2027-01-04",
+                                                "end_date": "2027-01-04", "reason": "Trip"})
+    assert r.status_code == 400
+    fake.employees["E1"]["start"] = "2019-06-01T00:00:00"  # over 7 years ago
+    admin.post("/api/auth/logout")
+    login(admin, "AB0001")
+    admin.post("/api/admin/xero/sync")
+    admin.post("/api/auth/logout")
+    login(admin, "AB0010")
+    me = admin.get("/api/leave/me").json()
+    assert "Long Service Leave" in [b["name"] for b in me["xero_balances"]]
+    assert "long_service" in [t["code"] for t in me["types"]]
+
+
+def test_contractors_have_no_leave(admin, fake):
+    with SessionLocal() as db:
+        db.get(Staff, "AB0016").has_leave = False
+        db.commit()
+    connect(admin)
+    with SessionLocal() as db:
+        assert db.get(XeroEmployeeLink, "AB0016") is None  # not auto-linked
+    assert "AB0016" not in [s["staff_id"] for s in admin.get("/api/admin/xero/status").json()["staff"]]
+    admin.post("/api/auth/logout")
+    login(admin, "AB0016")
+    assert admin.get("/api/auth/me").json()["has_leave"] is False
+    me = admin.get("/api/leave/me").json()
+    assert me["has_leave"] is False and me["types"] == [] and me["xero_balances"] is None
+    r = admin.post("/api/leave/requests", json={"leave_type": "unpaid", "start_date": "2027-01-04",
+                                                "end_date": "2027-01-04", "reason": "Away"})
+    assert r.status_code == 400 and "Contractors" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("value,expected", [
+    ("/Date(1704067200000+0000)/", date(2024, 1, 1)), ("/Date(1704067200000)/", date(2024, 1, 1)),
+    ("2019-06-01T00:00:00", date(2019, 6, 1)), (None, None), ("junk", None),
+])
+def test_parse_xero_date(value, expected):
+    assert xero.parse_xero_date(value) == expected

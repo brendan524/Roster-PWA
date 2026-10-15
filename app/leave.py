@@ -51,14 +51,41 @@ ONSHORE_TYPES = [
     LeaveType("unpaid", "Unpaid leave"),
 ]
 MAX_BACKDATE_DAYS = 60  # how far back personal/sick leave can be requested
+LONG_SERVICE_YEARS = 7  # long service leave is hidden from staff until this much service
 
 
-def types_for(staff: Staff) -> list[LeaveType]:
-    return OFFSHORE_TYPES if staff.location_type == "offshore" else ONSHORE_TYPES
+def default_has_leave(location_type: str, employment_status: str) -> bool:
+    """Onshore contractors aren't employees, so they take no leave. Offshore staff are
+    called "Contractor" in the staff file but do get leave."""
+    return not (location_type == "onshore" and employment_status.strip().lower().startswith("contract"))
 
 
-def type_by_code(staff: Staff, code: str) -> LeaveType | None:
-    return next((t for t in types_for(staff) if t.code == code), None)
+def long_service_ok(service_start: date | None, on: date) -> bool:
+    if service_start is None:
+        return False
+    return add_months(service_start, 12 * LONG_SERVICE_YEARS) <= on
+
+
+def is_long_service(name: str) -> bool:
+    return "long service" in name.lower()
+
+
+def types_for(staff: Staff, long_service: bool = False) -> list[LeaveType]:
+    if not staff.has_leave:
+        return []
+    if staff.location_type == "offshore":
+        return OFFSHORE_TYPES
+    return [t for t in ONSHORE_TYPES if long_service or t.code != "long_service"]
+
+
+def type_by_code(staff: Staff, code: str, long_service: bool = False) -> LeaveType | None:
+    return next((t for t in types_for(staff, long_service) if t.code == code), None)
+
+
+def label_for(staff: Staff, code: str) -> str:
+    """Display name of a leave type, including types this person can't currently apply for."""
+    pool = OFFSHORE_TYPES if staff.location_type == "offshore" else ONSHORE_TYPES
+    return next((t.label for t in pool if t.code == code), code)
 
 
 # ---- dates ---------------------------------------------------------------------
@@ -189,7 +216,7 @@ def compute_balance(
 
 def balances_for(db: Session, staff: Staff, today: date) -> list[Balance] | None:
     """Offshore balances, or None if this app doesn't keep them (onshore / no join date)."""
-    if staff.location_type != "offshore" or staff.join_date is None:
+    if staff.location_type != "offshore" or staff.join_date is None or not staff.has_leave:
         return None
     requests = db.query(LeaveRequest).filter_by(staff_id=staff.staff_id).all()
     adjustments = db.query(LeaveAdjustment).filter_by(staff_id=staff.staff_id).all()

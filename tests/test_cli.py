@@ -112,3 +112,17 @@ def test_tab_separated_paste_from_a_spreadsheet(tmp_path):
     assert seed_staff(str(p)) == 0
     with SessionLocal() as db:
         assert db.get(Staff, "AB0016").notes == "First Aid instructor (public bookings, AB HQ)"
+
+
+def test_onshore_contractors_seeded_without_leave_and_set_leave(tmp_path):
+    from app.cli import main
+    p = tmp_path / "staff.csv"
+    p.write_text("staff_id,name,location_type,employment_status\n"
+                 "AB0020,Con Tractor,onshore,Contract\nAB0021,Off Shore,offshore,Contractor\nAB0022,Cas Ual,onshore,Casual\n")
+    assert seed_staff(str(p)) == 0
+    with SessionLocal() as db:
+        assert [db.get(Staff, i).has_leave for i in ("AB0020", "AB0021", "AB0022")] == [False, True, True]
+    assert main(["set-leave", "AB0022", "no"]) == 0
+    assert seed_staff(str(p)) == 0  # re-seeding keeps the admin's choice
+    with SessionLocal() as db:
+        assert db.get(Staff, "AB0022").has_leave is False

@@ -248,6 +248,9 @@ def test_sick_and_personal_can_be_backdated(client, fixed_today, loc, code):
 @pytest.mark.parametrize("code", ["annual", "long_service", "unpaid"])
 def test_onshore_advance_only_types(client, fixed_today, code):
     add_staff("AB0010", None)
+    with SessionLocal() as db:
+        db.get(Staff, "AB0010").join_date = date(2015, 1, 1)  # long service needs 7 years
+        db.commit()
     login(client, "AB0010")
     assert apply(client, "2026-10-15", "2026-10-16", code=code).status_code == 400
     assert apply(client, "2026-10-16", "2026-10-16", code=code).status_code == 200
@@ -310,3 +313,19 @@ def test_attachment_rules(client, fixed_today):
     assert client.delete(f"/api/leave/attachments/{aid}").status_code == 200
     client.post(f"/api/leave/requests/{rid}/cancel")
     assert upload(client, rid, PDF).status_code == 409
+
+
+@pytest.mark.parametrize("loc,status,expected", [
+    ("onshore", "Contract", False), ("onshore", "contractor", False), ("offshore", "Contractor", True),
+    ("onshore", "Casual", True), ("onshore", "Part-time", True), ("onshore", "", True),
+])
+def test_default_has_leave(loc, status, expected):
+    from app.leave import default_has_leave
+    assert default_has_leave(loc, status) is expected
+
+
+def test_long_service_ok():
+    from app.leave import long_service_ok
+    assert not long_service_ok(None, date(2030, 1, 1))
+    assert not long_service_ok(date(2019, 10, 16), date(2026, 10, 15))
+    assert long_service_ok(date(2019, 10, 15), date(2026, 10, 15))

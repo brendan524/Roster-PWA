@@ -21,6 +21,7 @@ class Staff(Base):
     employment_status: Mapped[str] = mapped_column(String(40), default="")  # Director / Casual / Contract...
     notes: Mapped[str] = mapped_column(String(500), default="")
     role: Mapped[str] = mapped_column(String(10), default="staff")  # "staff" | "admin"
+    has_leave: Mapped[bool] = mapped_column(Boolean, default=True)  # False for contractors: no leave in the app
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     password_hash: Mapped[str | None] = mapped_column(String(255))
@@ -190,6 +191,7 @@ class XeroEmployeeLink(Base):
     xero_employee_id: Mapped[str] = mapped_column(String(64), unique=True)
     xero_name: Mapped[str] = mapped_column(String(200), default="")
     linked_by: Mapped[str] = mapped_column(String(32))  # "auto" or an admin's staff id
+    start_date: Mapped[date | None] = mapped_column(Date)  # employment start in Xero (long service)
 
 
 class XeroLeaveBalance(Base):

@@ -40,7 +40,7 @@ def status(_: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
     bal: dict[str, list] = {}
     for b in db.query(XeroLeaveBalance):
         bal.setdefault(b.staff_id, []).append(b)
-    onshore = sorted(db.query(Staff).filter_by(location_type="onshore", active=True), key=lambda s: s.name)
+    onshore = sorted(db.query(Staff).filter_by(location_type="onshore", active=True, has_leave=True), key=lambda s: s.name)
     return {
         "configured": xero.configured(),
         "connected": conn is not None,
@@ -50,7 +50,9 @@ def status(_: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
         "staff": [{
             "staff_id": s.staff_id, "name": s.name,
             "link": ({"xero_employee_id": links[s.staff_id].xero_employee_id, "xero_name": links[s.staff_id].xero_name,
-                      "linked_by": links[s.staff_id].linked_by} if s.staff_id in links else None),
+                      "linked_by": links[s.staff_id].linked_by,
+                      "start_date": (links[s.staff_id].start_date.isoformat()
+                                     if links[s.staff_id].start_date else None)} if s.staff_id in links else None),
             "balances": balances_out(bal.get(s.staff_id, [])),
         } for s in onshore],
         "xero_employees": [{"id": e["id"], "name": e["name"]} for e in xero.last_employees()],

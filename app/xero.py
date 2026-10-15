@@ -18,7 +18,7 @@ import logging
 import re
 import threading
 import time
-from datetime import UTC, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from urllib.parse import urlencode
 
@@ -173,6 +173,19 @@ def api_get(db: Session, http, path: str, params: dict | None = None) -> dict:
 
 # ---- sync ---------------------------------------------------------------------------
 
+def parse_xero_date(value) -> date | None:
+    """Xero payroll dates look like "/Date(1600000000000+0000)/"; newer responses may be ISO."""
+    if not value:
+        return None
+    m = re.match(r"/Date\((-?\d+)([+-]\d{4})?\)/", str(value))
+    try:
+        if m:
+            return datetime.fromtimestamp(int(m.group(1)) / 1000, UTC).date()
+        return date.fromisoformat(str(value)[:10])
+    except (ValueError, OverflowError):
+        return None
+
+
 def _norm(name: str) -> str:
     return re.sub(r"\s+", " ", (name or "").strip().lower())
 
@@ -198,7 +211,7 @@ def auto_link(db: Session, employees: list[dict]) -> int:
         if e["id"] not in linked_ids:
             by_name.setdefault(_norm(e["name"]), []).append(e)
     n = 0
-    for s in db.query(Staff).filter_by(location_type="onshore", active=True):
+    for s in db.query(Staff).filter_by(location_type="onshore", active=True, has_leave=True):
         if s.staff_id in linked_staff:
             continue
         match = None
@@ -230,6 +243,7 @@ def sync(db: Session, http=None) -> dict:
         for link in links:
             data = api_get(db, http, f"Employees/{link.xero_employee_id}")
             emp = (data.get("Employees") or [{}])[0]
+            link.start_date = parse_xero_date(emp.get("StartDate"))
             db.query(XeroLeaveBalance).filter_by(staff_id=link.staff_id).delete()
             for lb in emp.get("LeaveBalances") or []:
                 db.add(XeroLeaveBalance(staff_id=link.staff_id, leave_type_id=lb["LeaveTypeID"],

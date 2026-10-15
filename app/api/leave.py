@@ -12,8 +12,18 @@ from sqlalchemy.orm import Session
 from app.config import get_settings
 from app.db import get_db
 from app.deps import admin_staff, ready_staff
-from app.leave import MAX_BACKDATE_DAYS, MAX_REQUEST_DAYS, balances_for, count_days, type_by_code, types_for
-from app.models import LeaveAttachment, LeaveRequest, Staff, XeroLeaveBalance
+from app.leave import (
+    MAX_BACKDATE_DAYS,
+    MAX_REQUEST_DAYS,
+    balances_for,
+    count_days,
+    is_long_service,
+    label_for,
+    long_service_ok,
+    type_by_code,
+    types_for,
+)
+from app.models import LeaveAttachment, LeaveRequest, Staff, XeroEmployeeLink, XeroLeaveBalance
 
 router = APIRouter(prefix="/api", tags=["leave"])
 
@@ -37,14 +47,13 @@ def _attachments(db: Session, request_ids: list[int]) -> dict[int, list[dict]]:
 
 def _request_out(r: LeaveRequest, staff: Staff | None = None, names: dict[str, str] | None = None,
                  files: dict[int, list[dict]] | None = None) -> dict:
-    lt = type_by_code(staff, r.leave_type) if staff else None
     return {
         "attachments": (files or {}).get(r.id, []),
         "id": r.id,
         "staff_id": r.staff_id,
         "name": staff.name if staff else None,
         "leave_type": r.leave_type,
-        "type_label": lt.label if lt else r.leave_type,
+        "type_label": label_for(staff, r.leave_type) if staff else r.leave_type,
         "start_date": r.start_date.isoformat(),
         "end_date": r.end_date.isoformat(),
         "start_half": r.start_half,
@@ -68,10 +77,22 @@ def _balances_out(db: Session, staff: Staff, history: int = 0):
 XERO_MATCH = {"annual": ("annual",), "personal": ("personal", "carer", "sick"), "long_service": ("long service",)}
 
 
+def service_start(db: Session, staff: Staff) -> date | None:
+    """Employment start for long service: Xero's start date if linked, else the app's join date."""
+    link = db.get(XeroEmployeeLink, staff.staff_id)
+    return (link.start_date if link and link.start_date else None) or staff.join_date
+
+
+def _long_service_ok(db: Session, staff: Staff) -> bool:
+    return staff.location_type == "onshore" and long_service_ok(service_start(db, staff), today())
+
+
 def _xero_out(db: Session, staff: Staff) -> list[dict] | None:
-    if staff.location_type != "onshore":
+    if staff.location_type != "onshore" or not staff.has_leave:
         return None
     rows = db.query(XeroLeaveBalance).filter_by(staff_id=staff.staff_id).order_by(XeroLeaveBalance.leave_name).all()
+    if not _long_service_ok(db, staff):  # kept hidden until 7 years' service
+        rows = [b for b in rows if not is_long_service(b.leave_name)]
     if not rows:
         return None
     return [{"name": b.leave_name, "units": float(b.units), "unit_type": b.unit_type,
@@ -95,9 +116,10 @@ def my_leave(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db))
     files = _attachments(db, [r.id for r in requests])
     return {
         "location_type": staff.location_type,
+        "has_leave": staff.has_leave,
         "join_date": staff.join_date.isoformat() if staff.join_date else None,
         "types": [{"code": t.code, "label": t.label, "has_balance": t.accrual is not None,
-                   "advance_only": t.advance_only} for t in types_for(staff)],
+                   "advance_only": t.advance_only} for t in types_for(staff, _long_service_ok(db, staff))],
         "max_backdate_days": MAX_BACKDATE_DAYS,
         "balances": _balances_out(db, staff, history=12),
         "xero_balances": _xero_out(db, staff),
@@ -117,7 +139,9 @@ class LeaveIn(BaseModel):
 
 @router.post("/leave/requests")
 def apply_for_leave(body: LeaveIn, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db)):
-    lt = type_by_code(staff, body.leave_type)
+    if not staff.has_leave:
+        raise HTTPException(400, "Contractors don't take leave through the app — talk to Brendan or Aaron.")
+    lt = type_by_code(staff, body.leave_type, _long_service_ok(db, staff))
     if lt is None:
         raise HTTPException(400, "That leave type isn't available to you.")
     if body.end_date < body.start_date:
@@ -201,7 +225,8 @@ def admin_leave(_: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
     recent = (db.query(LeaveRequest)
               .filter(LeaveRequest.status.in_(("approved", "declined", "cancelled")), LeaveRequest.end_date >= since)
               .order_by(LeaveRequest.start_date.desc()).limit(100).all())
-    offshore = sorted((s for s in staff.values() if s.location_type == "offshore" and s.active), key=lambda s: s.name)
+    offshore = sorted((s for s in staff.values() if s.location_type == "offshore" and s.active and s.has_leave),
+                      key=lambda s: s.name)
     files = _attachments(db, [r.id for r in pending + recent])
     return {
         "today": today().isoformat(),

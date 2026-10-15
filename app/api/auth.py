@@ -40,6 +40,7 @@ def me_payload(staff: Staff) -> dict:
         "role": staff.role,
         "department": staff.department,
         "must_change_password": staff.must_change_password,
+        "has_leave": staff.has_leave,
     }
 
 
