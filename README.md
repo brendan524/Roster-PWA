@@ -2,9 +2,11 @@
 
 A self-hosted PWA for AB Group staff. It replaces Frappe HR.
 
-**Stage 1 (this build):** staff log in on their phone and see **only their own** shifts, in a list or calendar view. The shifts are read live from the roster Google Sheet. Admins also see the whole team's roster and a list of problems found in the sheet.
+**Stage 1:** staff log in on their phone and see **only their own** shifts, in a list or calendar view. The shifts are read live from the roster Google Sheet. Admins also see the whole team's roster and a list of problems found in the sheet.
 
-Later stages: clock in/out with PIN and GPS (Stage 2), leave (3), availability (4), and the pay report (5).
+**Stage 2:** clock in/out with a PIN, on a personal phone (with GPS) or at an office kiosk. Works offline. Admins get a daily **Clock** view with late, early, missing and unrostered flags, plus corrections with an audit trail.
+
+Later stages: leave (3), availability (4), and the pay report (5).
 
 ```
 hr.abgroup.au ─► Traefik (existing) ─► roster-app (FastAPI + PWA) ─► roster-db (Postgres, private network)
@@ -23,6 +25,33 @@ hr.abgroup.au ─► Traefik (existing) ─► roster-app (FastAPI + PWA) ─►
 - **Privacy:** `/api/roster/me` filters to the logged-in Staff ID on the server. Staff never receive anyone else's shifts or the sheet issues list. Tests enforce this.
 - **Fail loud:** if a sheet row has an unknown Staff ID, a bad date or time, or a missing field, that row shows up on the admin **Sheet issues** tab with its tab name and row number. It is never silently dropped.
 - **Caching and offline:** the sheet is cached for 2 minutes, and **Refresh** forces a re-read (at most once every 20 seconds). If Google can't be reached, the app shows the last good copy with a banner. If the phone is offline, it shows the last roster it loaded. Logging out wipes that copy.
+
+## Clock in / out
+
+- **On a phone:** staff tap **Clock in** or **Clock out** on My shifts and enter their PIN. The app records the time and, if allowed, GPS location. A missing location is flagged but never blocks a punch.
+- **At a kiosk:** staff tap **Clock in** or **Clock out** and enter their PIN. The PIN alone identifies the person, and the screen confirms with their first name.
+- **Time:** the server's clock decides the time, not the phone's. Times are stored in UTC and compared with the roster in Melbourne time (daylight-saving aware), so offshore and onshore punches line up.
+- **Offline:** a punch is saved on the device first, then sent. With no connection it's sent automatically later, with the phone's clock error corrected, and it's flagged "sent later".
+- **No double counting:** re-sending the same punch stores it once. Tapping the same action twice within 60 seconds counts once. Clocking in twice in a row (forgot to clock out) keeps both, and the first is flagged "No clock-out".
+- **Audit trail:** punches can't be edited or deleted, and the database itself refuses. Admin fixes add a new entry (with who and why) or mark one as not counting (with a reason).
+- **Flags** on the admin **Clock** tab:
+  - **Late:** clocked in more than 10 minutes after the rostered start.
+  - **Left early:** clocked out more than 10 minutes before the rostered end.
+  - **No clock-out:** still open 2 hours after the shift ended.
+  - **Not clocked in:** rostered, but no punch.
+  - **Not on the roster:** a punch with no matching shift.
+  - **Information only:** sent later (offline), phone clock corrected, no location, entered by admin.
+- **Settings** (`.env`): `LATE_GRACE_MINUTES`, `EARLY_GRACE_MINUTES` (both 10), `KIOSK_LOCATIONS` (`AB HQ:onshore,WrkPod:offshore`).
+
+### Setting up a kiosk
+
+1. On the tablet, open **https://hr.abgroup.au/kiosk** and add it to the home screen. It then opens full screen as "AB Kiosk".
+2. An admin chooses the location (AB HQ or WrkPod), enters their Staff ID and password, and taps **Set up this kiosk**. The admin isn't left logged in. The device just becomes a kiosk for that office.
+3. Plug the tablet in, and turn off auto-lock in its settings. The page also asks the screen to stay on.
+
+A lost tablet or a kiosk being retired: `python -m app.cli list-kiosks`, then `remove-kiosk <number>`. That device stops working straight away.
+
+**Limitation:** a kiosk can't check PINs while offline. If someone enters a wrong PIN with no connection, the punch can't be matched to anyone when it syncs, so it is dropped. Keep the kiosks on reliable Wi-Fi. Phones show the person an error if this happens.
 
 ## The roster sheet
 
@@ -93,6 +122,8 @@ docker compose exec roster-app python -m app.cli set-role AB0004 admin    # or: 
 docker compose exec roster-app python -m app.cli reset-password AB0003   # new temp password, logs them out everywhere
 docker compose exec roster-app python -m app.cli set-pin AB0003          # new random PIN (add --choose to type one)
 docker compose exec roster-app python -m app.cli deactivate AB0003       # can't log in; their shifts get flagged
+docker compose exec roster-app python -m app.cli list-kiosks
+docker compose exec roster-app python -m app.cli remove-kiosk 2          # lost/retired kiosk device
 ```
 
 ### Backups

@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from app.db import SessionLocal
-from app.models import Staff
+from app.models import Kiosk, Staff
 from app.roster import CellError, parse_date
 from app.security import (
     delete_all_sessions,
@@ -239,6 +239,26 @@ def set_role(staff_id: str, role: str) -> int:
     return 0
 
 
+def list_kiosks() -> int:
+    with SessionLocal() as db:
+        for k in db.query(Kiosk).order_by(Kiosk.id):
+            seen = k.last_seen_at.strftime("%Y-%m-%d %H:%M UTC") if k.last_seen_at else "never"
+            print(f"#{k.id:<4} {k.name:<12} {k.location_type:<9} {'active ' if k.active else 'REMOVED'}  "
+                  f"set up by {k.created_by} on {k.created_at:%Y-%m-%d}, last seen {seen}")
+    return 0
+
+
+def remove_kiosk(kiosk_id: int) -> int:
+    with SessionLocal() as db:
+        k = db.get(Kiosk, kiosk_id)
+        if k is None:
+            sys.exit(f"No kiosk #{kiosk_id}")
+        k.active = False
+        db.commit()
+        print(f"Kiosk #{k.id} ({k.name}) removed. That device will ask for admin setup again.")
+    return 0
+
+
 def list_staff() -> int:
     with SessionLocal() as db:
         for s in db.query(Staff).order_by(Staff.staff_id):
@@ -261,6 +281,8 @@ def main(argv: list[str] | None = None) -> int:
     sr.add_argument("staff_id")
     sr.add_argument("role", choices=["admin", "staff"])
     sub.add_parser("list-staff")
+    sub.add_parser("list-kiosks")
+    sub.add_parser("remove-kiosk", help="stop a kiosk device working (e.g. lost tablet)").add_argument("kiosk_id", type=int)
     a = p.parse_args(argv)
 
     if a.cmd == "seed-staff":
@@ -269,6 +291,10 @@ def main(argv: list[str] | None = None) -> int:
         return reset_password(a.staff_id, a.choose)
     if a.cmd == "set-pin":
         return set_pin(a.staff_id, a.choose)
+    if a.cmd == "list-kiosks":
+        return list_kiosks()
+    if a.cmd == "remove-kiosk":
+        return remove_kiosk(a.kiosk_id)
     if a.cmd == "set-role":
         return set_role(a.staff_id, a.role)
     if a.cmd in ("activate", "deactivate"):

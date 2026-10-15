@@ -2,7 +2,7 @@ import logging
 from pathlib import Path
 
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -21,7 +21,7 @@ CSP = (
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 )
 CSRF_HEADER = "x-ab-app"
-NO_CACHE_FILES = {"/", "/index.html", "/sw.js", "/manifest.webmanifest"}
+NO_CACHE_FILES = {"/", "/index.html", "/sw.js", "/manifest.webmanifest", "/kiosk.html", "/kiosk.webmanifest"}
 
 
 @app.middleware("http")
@@ -48,6 +48,11 @@ async def security(request: Request, call_next):
 app.include_router(auth.router)
 app.include_router(roster.router)
 app.include_router(clock.router)
+
+
+@app.get("/kiosk", include_in_schema=False)
+def kiosk_page():
+    return RedirectResponse("/kiosk.html")
 
 
 @app.get("/api/health")

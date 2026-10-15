@@ -161,17 +161,19 @@ def record_punch(
             occurred_at = now  # live punch: the server's clock is the authority
 
     if source != "admin":
+        # Double-tap: the person's latest punch is the same action, moments ago.
+        # (If they did the opposite in between, e.g. in → out → in, it's a real new punch.)
         window = timedelta(seconds=get_settings().duplicate_window_seconds)
         voided = _voided_ids(db, staff.staff_id)
         recent = (
             db.query(Punch)
-            .filter(Punch.staff_id == staff.staff_id, Punch.kind == kind,
+            .filter(Punch.staff_id == staff.staff_id,
                     Punch.occurred_at >= occurred_at - window, Punch.occurred_at <= occurred_at + window)
-            .order_by(Punch.occurred_at.desc())
+            .order_by(Punch.occurred_at.desc(), Punch.id.desc())
             .all()
         )
         recent = [p for p in recent if p.id not in voided]
-        if recent:
+        if recent and recent[0].kind == kind:
             db.rollback()  # release the row lock
             return PunchResult(recent[0], duplicate=True)
 

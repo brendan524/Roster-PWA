@@ -5,13 +5,14 @@
      marked with x-ab-offline so the app can say so. Cleared on logout.
    - Everything else under /api (logins, admin data) is never cached. */
 
-const VERSION = "v3";
+const VERSION = "v4";
 const SHELL = `ab-shell-${VERSION}`;
 const DATA = "ab-data"; // personal roster cache; wiped on logout
 const SHELL_FILES = ["/", "/app.css", "/app.js", "/manifest.webmanifest",
   "/fonts/lato-400.woff2", "/fonts/lato-700.woff2", "/fonts/lato-900.woff2",
-  "/icons/icon-192.png", "/icons/favicon-32.png", "/logo.png"];
-const OFFLINE_API = ["/api/auth/me", "/api/roster/me"];
+  "/icons/icon-192.png", "/icons/favicon-32.png", "/logo.png",
+  "/clock-shared.js", "/kiosk.html", "/kiosk.js", "/kiosk.css", "/kiosk.webmanifest"];
+const OFFLINE_API = ["/api/auth/me", "/api/roster/me", "/api/clock/me"];
 
 self.addEventListener("install", (e) => {
   e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_FILES)).then(() => self.skipWaiting()));
@@ -45,12 +46,14 @@ self.addEventListener("fetch", (e) => {
 });
 
 async function shellNetworkFirst(req) {
+  // Pages are cached by path (so /kiosk.html and / each come back offline as themselves).
+  const key = req.mode === "navigate" ? new URL(req.url).pathname : req;
   try {
     const res = await fetch(req);
-    if (res.ok) (await caches.open(SHELL)).put(req.mode === "navigate" ? "/" : req, res.clone());
+    if (res.ok && !res.redirected) (await caches.open(SHELL)).put(key, res.clone());
     return res;
   } catch {
-    return (await caches.match(req.mode === "navigate" ? "/" : req)) || Response.error();
+    return (await caches.match(key)) || (await caches.match("/")) || Response.error();
   }
 }
 

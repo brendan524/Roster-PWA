@@ -180,3 +180,68 @@ input:focus, select:focus, button:focus-visible { outline: 3px solid rgba(9,195,
 .tabbar button[aria-current=page] { color: var(--ink); }
 .tabbar button[aria-current=page]::before { content: ""; position: absolute; top: 0; left: 25%; right: 25%; height: 3px; background: var(--blue); border-radius: 0 0 3px 3px; }
 .badge { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 999px; background: var(--error); color: var(--white); font-size: 11px; line-height: 18px; }
+
+/* ---- clock in / out ---- */
+.clock-card {
+  background: var(--white); border-radius: var(--radius); padding: 16px; margin-bottom: 18px;
+  box-shadow: 0 1px 2px rgba(0,0,0,.05); border-top: 5px solid var(--line);
+}
+.clock-card.is-in { border-top-color: var(--green); }
+.clock-status { display: flex; align-items: center; gap: 8px; font-weight: 900; font-size: 17px; }
+.clock-status .dot { width: 10px; height: 10px; border-radius: 50%; background: #B9C0C7; }
+.clock-card.is-in .clock-status .dot { background: var(--green); box-shadow: 0 0 0 4px rgba(128,194,66,.25); }
+.btn-clock {
+  display: block; width: 100%; margin-top: 12px; padding: 18px; border: 0; border-radius: 12px;
+  font-weight: 900; font-size: 20px; cursor: pointer; letter-spacing: .3px;
+}
+.btn-clock.in { background: var(--blue); color: var(--black); }
+.btn-clock.out { background: var(--black); color: var(--white); }
+.btn-clock:disabled { opacity: .6; cursor: default; }
+.clock-note, .clock-pending, .clock-today { font-size: 14px; color: var(--muted); margin: 10px 0 0; }
+.clock-msg { margin: 10px 0 0; padding: 10px 12px; border-radius: 8px; font-size: 14px; font-weight: 700; }
+.clock-msg.ok { background: #EFF7E6; color: var(--green-dark); }
+.clock-msg.warn { background: var(--warn-bg); color: var(--warn); }
+.clock-msg.error { background: var(--error-bg); color: var(--error); }
+
+/* PIN pad (staff app + kiosk) */
+.pin-overlay {
+  position: fixed; inset: 0; z-index: 50; background: #050607;
+  display: flex; align-items: center; justify-content: center; padding: 16px;
+}
+.pin-box { width: 100%; max-width: 360px; text-align: center; color: var(--white); }
+.pin-title { font-size: 20px; font-weight: 900; margin: 0 0 18px; }
+.pin-dots { display: flex; justify-content: center; gap: 14px; margin-bottom: 26px; }
+.pin-dots i { width: 16px; height: 16px; border-radius: 50%; border: 2px solid var(--white); }
+.pin-dots i.on { background: var(--blue); border-color: var(--blue); }
+.pin-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; }
+.pin-key {
+  aspect-ratio: 1.4 / 1; border: 0; border-radius: 16px; background: #1E2328; color: var(--white);
+  font-size: 28px; font-weight: 700; cursor: pointer;
+}
+.pin-key:active { background: #2E353C; }
+.pin-cancel, .pin-del { font-size: 16px; background: transparent; }
+
+/* admin clock view */
+.day-nav { display: flex; align-items: center; justify-content: space-between; margin-bottom: 14px; }
+.day-title { font-weight: 900; font-size: 17px; display: flex; align-items: center; gap: 8px; }
+.today-pill { background: var(--blue); color: var(--black); font-size: 11px; font-weight: 900; padding: 2px 8px; border-radius: 999px; }
+.clock-sess { background: var(--white); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; border-left: 5px solid var(--green); box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+.clock-sess.flagged { border-left-color: var(--warn); }
+.clock-sess .row1 { display: flex; justify-content: space-between; gap: 10px; margin-bottom: 4px; }
+.clock-sess .hrs { font-size: 13px; color: var(--muted); }
+.clock-sess .pl { font-size: 14px; margin: 2px 0; }
+.clock-sess .pl.missing { color: var(--error); font-weight: 700; }
+.clock-sess .pl a { color: var(--blue-dark); }
+.clock-sess .meta { font-size: 13px; color: var(--muted); margin-top: 4px; }
+.flags { display: flex; flex-wrap: wrap; gap: 6px; margin: 8px 0 4px; }
+.flag { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; }
+.flag.e { background: var(--error-bg); color: var(--error); }
+.flag.w { background: var(--warn-bg); color: var(--warn); }
+.flag.i { background: #ECEEF0; color: var(--muted); }
+.link-btn.dark { color: var(--blue-dark); padding: 6px 0; }
+.fix-form { display: grid; gap: 8px; margin-top: 8px; padding-top: 10px; border-top: 1px solid var(--line); }
+.fix-actions { display: flex; align-items: center; gap: 14px; }
+.btn.small { width: auto; margin: 0; padding: 10px 18px; font-size: 15px; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip.big { font-size: 13px; padding: 5px 10px; margin: 0; }
+.on-clock { margin-bottom: 8px; }

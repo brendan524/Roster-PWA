@@ -426,3 +426,12 @@ def test_offline_and_gps_flags():
                             received_at=t + timedelta(minutes=30))])
     analyse(sess, sh, MEL, mel(2026, 10, 20, 12))
     assert set(codes(sess[0])) == {"no_gps", "offline", "clock_adjusted", "on_clock"}
+
+
+def test_in_out_in_within_a_minute_keeps_all_three(sonya):
+    """Not a double-tap: an opposite punch in between means it's a real new action."""
+    for kind in ("in", "out", "in"):
+        r = sonya.post("/api/clock/punch", json=punch_body(kind))
+        assert r.json()["duplicate"] is False, kind
+    assert [p.kind for p in punches_for("AB0010")] == ["in", "out", "in"]
+    assert sonya.get("/api/clock/me").json()["clocked_in"] is True

@@ -19,6 +19,9 @@ services:
       DATABASE_URL: postgresql+psycopg://roster:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@roster-db:5432/roster
       PIN_PEPPER: ${PIN_PEPPER:?set PIN_PEPPER in .env}
       PIN_LENGTH: ${PIN_LENGTH:-6}
+      LATE_GRACE_MINUTES: ${LATE_GRACE_MINUTES:-10}
+      EARLY_GRACE_MINUTES: ${EARLY_GRACE_MINUTES:-10}
+      KIOSK_LOCATIONS: ${KIOSK_LOCATIONS:-AB HQ:onshore,WrkPod:offshore}
       TIMEZONE: ${TIMEZONE:-Australia/Melbourne}
       ROSTER_SOURCE: google
       ROSTER_SHEET_ID: ${ROSTER_SHEET_ID:?set ROSTER_SHEET_ID in .env}

@@ -1,13 +1,14 @@
 "use strict";
 
-/* AB Group staff app — Stage 1: login + my roster (list + calendar), admin team view + sheet issues.
+/* AB Group staff app: login, my roster (list + calendar), clock in/out with PIN + GPS;
+   admins also get the clock day view, team roster and sheet issues.
    No framework, no build step. All roster text is inserted with textContent (never innerHTML). */
 
 const state = {
   me: null,
   roster: null,       // /api/roster/me
   admin: null,        // /api/admin/roster
-  tab: "mine",        // mine | team | issues
+  tab: "mine",        // mine | clock | team | issues
   view: localGet("view") || "list",  // list | calendar
   calIndex: 0,        // which of the two months the calendar shows
   selectedDay: null,  // "YYYY-MM-DD"
@@ -15,6 +16,13 @@ const state = {
   teamStaff: "",
   teamMonth: 0,
   offline: false,
+  clock: null,        // /api/clock/me
+  clockBusy: false,
+  clockMsg: null,     // {type: "ok"|"warn"|"error", text}
+  pending: 0,         // punches waiting in this device's outbox
+  clockDay: null,     // admin clock view: "YYYY-MM-DD"
+  clockData: null,    // /api/admin/clock
+  fixOpen: null,      // which admin card has its fix form open
 };
 
 const app = document.getElementById("app");
@@ -177,8 +185,9 @@ function renderTabbar() {
   }, label, extra);
   tabbar.replaceChildren(
     tab("mine", "My shifts"),
+    tab("clock", "Clock"),
     tab("team", "Team"),
-    tab("issues", "Sheet issues", errors ? h("span", { class: "badge" }, errors) : null),
+    tab("issues", "Issues", errors ? h("span", { class: "badge" }, errors) : null),
   );
 }
 
@@ -210,7 +219,100 @@ function pageHead(title, data, onRefresh) {
 // ---------- my roster ----------
 
 async function loadMine(refresh = false) {
-  state.roster = await api("/api/roster/me" + (refresh ? "?refresh=true" : ""));
+  const [roster, clock] = await Promise.all([
+    api("/api/roster/me" + (refresh ? "?refresh=true" : "")),
+    api("/api/clock/me").catch(() => state.clock),
+  ]);
+  state.roster = roster;
+  state.clock = clock;
+  await refreshPending();
+}
+
+// ---------- clock in / out (personal device) ----------
+
+const STALE_CLOCK_IN_MS = 16 * 3600 * 1000;
+const mineFilter = (item) => item.url === "/api/clock/punch" && state.me && item.staff_id === state.me.staff_id;
+
+async function refreshPending() {
+  state.pending = await ABClock.pending(mineFilter);
+}
+
+function setClockMsg(type, text) {
+  state.clockMsg = { type, text, at: Date.now() };
+  setTimeout(() => {
+    if (state.clockMsg && Date.now() - state.clockMsg.at >= 9000) { state.clockMsg = null; if (state.tab === "mine" && state.roster) renderMine(); }
+  }, 9500);
+}
+
+async function flushMine() {
+  if (!state.me) return;
+  const before = state.pending;
+  await ABClock.flush(mineFilter, (item, reason) => {
+    setClockMsg("error", `Your clock-${item.body.kind} from ${ABClock.fmtDayTime(new Date(item.body.device_time).toISOString())} couldn't be saved: ${reason} Please tell your manager.`);
+  });
+  await refreshPending();
+  if (before && !state.pending) {
+    try { state.clock = await api("/api/clock/me"); } catch { /* still offline */ }
+  }
+  if (state.tab === "mine" && state.roster) renderMine();
+}
+
+async function doPunch(kind) {
+  const geoPromise = ABClock.startGeo();
+  const pin = await ABClock.pinPad({ title: kind === "in" ? "Enter your PIN to clock in" : "Enter your PIN to clock out" });
+  if (!pin) return;
+  const pressedAt = Date.now();
+  state.clockBusy = true; state.clockMsg = null; renderMine();
+  // Use the location if it's ready (or arrives within 4s); never hold the punch up for it.
+  const geo = await Promise.race([geoPromise, new Promise((r) => setTimeout(() => r({ status: "timeout" }), 4000))]);
+  const client_id = ABClock.uuid();
+  const res = await ABClock.submit({
+    client_id, url: "/api/clock/punch", staff_id: state.me.staff_id,
+    body: { client_id, kind, pin, device_time: pressedAt, geo },
+  });
+  state.clockBusy = false;
+  const word = kind === "in" ? "in" : "out";
+  if (res.result === "sent") {
+    const d = res.data;
+    state.clock = { ...(state.clock || {}), clocked_in: d.clocked_in, since: d.since };
+    setClockMsg("ok", d.duplicate ? `Already clocked ${word} at ${ABClock.fmtTime(d.occurred_at)}.` : `Clocked ${word} at ${ABClock.fmtTime(d.occurred_at)}.`);
+    api("/api/clock/me").then((c) => { state.clock = c; renderMine(); }).catch(() => {});
+  } else if (res.result === "queued") {
+    state.clock = { ...(state.clock || {}), clocked_in: kind === "in", since: kind === "in" ? new Date(pressedAt).toISOString() : null };
+    setClockMsg("warn", `No connection. Your clock-${word} at ${ABClock.fmtTime(new Date(pressedAt).toISOString())} is saved on this phone and will send automatically.`);
+  } else {
+    setClockMsg("error", res.message);
+  }
+  await refreshPending();
+  renderMine();
+}
+
+function clockCard() {
+  const c = state.clock;
+  if (!c) return null;
+  if (!c.has_pin) {
+    return h("section", { class: "clock-card" }, h("div", { class: "clock-status" }, "Clock in/out needs a PIN. Ask Brendan, Aaron or Dylan to set one up for you."));
+  }
+  const stale = c.clocked_in && c.since && Date.now() - new Date(c.since).getTime() > STALE_CLOCK_IN_MS;
+  const isIn = c.clocked_in && !stale;
+  const kind = isIn ? "out" : "in";
+  const today = new Date().toDateString();
+  const todays = (c.recent || []).filter((p) => new Date(p.occurred_at).toDateString() === today).reverse();
+  const msg = state.clockMsg;
+  return h("section", { class: `clock-card ${isIn ? "is-in" : ""}` },
+    h("div", { class: "clock-status" },
+      h("span", { class: "dot", "aria-hidden": "true" }),
+      isIn ? `Clocked in since ${ABClock.fmtTime(c.since)}` : "Not clocked in"),
+    stale ? h("p", { class: "clock-note" }, `Your clock-in from ${ABClock.fmtDayTime(c.since)} has no clock-out. Your manager will fix it — just clock in as normal.`) : null,
+    h("button", {
+      class: `btn-clock ${kind}`, disabled: state.clockBusy,
+      onclick: () => doPunch(kind),
+    }, state.clockBusy ? "Saving…" : kind === "in" ? "Clock in" : "Clock out"),
+    msg ? h("p", { class: `clock-msg ${msg.type}`, role: "status" }, msg.text) : null,
+    state.pending ? h("p", { class: "clock-pending" }, `${state.pending} waiting to send — it'll go automatically when you're back online.`) : null,
+    todays.length ? h("p", { class: "clock-today" }, "Today: ",
+      todays.map((p) => `${p.kind === "in" ? "In" : "Out"} ${ABClock.fmtTime(p.occurred_at)}`).join(" · ")) : null,
+  );
 }
 
 function shiftCard(s, { past = false, showWho = false } = {}) {
@@ -273,6 +375,7 @@ function renderMine() {
 
   const body = state.view === "list" ? renderList(r, today) : renderCalendar(r, today);
   render(
+    clockCard(),
     pageHead("My shifts", r, async () => { await loadMine(true); renderMine(); }),
     seg,
     state.view === "list" ? nextCard : null,
@@ -436,6 +539,147 @@ function renderIssues() {
   );
 }
 
+// ---------- admin: clock day view ----------
+
+async function loadClockDay(day) {
+  state.clockData = await api("/api/admin/clock" + (day ? `?day=${day}` : ""));
+  state.clockDay = state.clockData.day;
+}
+
+function shiftDays(isoDay, n) {
+  const d = parseISO(isoDay); d.setDate(d.getDate() + n); return iso(d);
+}
+
+const FLAG_CLASS = { error: "e", warning: "w", info: "i" };
+
+function punchLine(label, p, tz) {
+  if (!p) return h("div", { class: "pl missing" }, `${label}: —`);
+  const where = p.source === "kiosk" ? `${p.kiosk || "Kiosk"} kiosk`
+    : p.source === "admin" ? `entered by ${p.created_by}${p.reason ? ` — “${p.reason}”` : ""}`
+      : "phone";
+  const map = p.geo && p.geo.status === "ok"
+    ? h("a", { href: `https://www.google.com/maps?q=${p.geo.lat},${p.geo.lon}`, target: "_blank", rel: "noopener" },
+      `map (±${Math.round(p.geo.accuracy || 0)} m)`)
+    : null;
+  return h("div", { class: "pl" }, h("b", {}, `${label} ${ABClock.fmtTime(p.occurred_at, tz)}`), ` · ${where}`, map ? " · " : null, map);
+}
+
+function localInputValue(isoTs, tz) {
+  // "YYYY-MM-DDTHH:MM" in the given zone, for <input type="datetime-local">
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("en-CA", {
+    timeZone: tz, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  }).formatToParts(new Date(isoTs)).map((x) => [x.type, x.value]));
+  return `${parts.year}-${parts.month}-${parts.day}T${parts.hour}:${parts.minute}`;
+}
+
+function fixForm(key, options, onDone) {
+  const err = h("p", { class: "form-error", hidden: true });
+  const action = h("select", { "aria-label": "What to fix" }, options.map((o, i) => h("option", { value: String(i) }, o.label)));
+  const when = h("input", { type: "datetime-local", "aria-label": "Time (Melbourne)" });
+  const reason = h("input", { type: "text", placeholder: "Reason (required), e.g. forgot to clock out", maxlength: "300" });
+  const sync = () => {
+    const o = options[Number(action.value)];
+    when.hidden = !o.needsTime;
+    if (o.needsTime && o.defaultTime) when.value = o.defaultTime;
+  };
+  action.addEventListener("change", sync);
+  sync();
+  const save = h("button", {
+    class: "btn small", onclick: async () => {
+      err.hidden = true;
+      const o = options[Number(action.value)];
+      if (reason.value.trim().length < 3) { err.textContent = "Please give a reason."; err.hidden = false; return; }
+      if (o.needsTime && !when.value) { err.textContent = "Please choose a time."; err.hidden = false; return; }
+      save.disabled = true;
+      try { await o.run(when.value, reason.value.trim()); state.fixOpen = null; await onDone(); }
+      catch (ex) { err.textContent = ex.message; err.hidden = false; save.disabled = false; }
+    },
+  }, "Save");
+  return h("div", { class: "fix-form" }, action, when, reason, err,
+    h("div", { class: "fix-actions" }, save, h("button", { class: "link-btn dark", onclick: () => { state.fixOpen = null; renderClock(); } }, "Cancel")));
+}
+
+const addPunch = (staffId, kind) => (localTime, reason) =>
+  api("/api/admin/clock/punch", { method: "POST", body: { staff_id: staffId, kind, local_time: localTime, reason } });
+const voidPunch = (id) => (_t, reason) => api("/api/admin/clock/void", { method: "POST", body: { punch_id: id, reason } });
+
+function sessionCard(sess, idx, d) {
+  const tz = d.tz;
+  const key = `s${idx}`;
+  const sh = sess.shift;
+  const shiftStart = sh ? `${sh.date}T${sh.start}` : null;
+  const nowLocal = localInputValue(new Date().toISOString(), tz);
+  // Default a missing clock-out to the rostered end, or now if the shift hasn't finished.
+  const shiftEnd = sh ? [`${sh.date}T${sh.end}`, nowLocal].sort()[0] : nowLocal;
+  const opts = [];
+  if (!sess.clock_out) opts.push({ label: "Add clock-out time", needsTime: true, defaultTime: shiftEnd, run: addPunch(sess.staff_id, "out") });
+  if (!sess.clock_in) opts.push({ label: "Add clock-in time", needsTime: true, defaultTime: shiftStart, run: addPunch(sess.staff_id, "in") });
+  if (sess.clock_in) opts.push({ label: `Remove clock-in (${ABClock.fmtTime(sess.clock_in.occurred_at, tz)})`, run: voidPunch(sess.clock_in.id) });
+  if (sess.clock_out) opts.push({ label: `Remove clock-out (${ABClock.fmtTime(sess.clock_out.occurred_at, tz)})`, run: voidPunch(sess.clock_out.id) });
+  const flagged = sess.flags.some((f) => f.level !== "info");
+  return h("article", { class: `clock-sess ${flagged ? "flagged" : ""}` },
+    h("div", { class: "row1" }, h("b", {}, sess.name), sess.worked_hours != null ? h("span", { class: "hrs" }, `${fmtHours(sess.worked_hours)} worked`) : null),
+    punchLine("In", sess.clock_in, tz),
+    punchLine("Out", sess.clock_out, tz),
+    sh ? h("div", { class: "meta" }, `Rostered ${fmtTime(sh.start)}–${fmtTime(sh.end)} (${fmtHours(sh.scheduled_hours)}) · ${[sh.role, sh.location].filter(Boolean).join(" · ")}`) : null,
+    sess.flags.length ? h("div", { class: "flags" }, sess.flags.map((f) => h("span", { class: `flag ${FLAG_CLASS[f.level] || "i"}` }, f.label))) : null,
+    state.fixOpen === key ? fixForm(key, opts, reloadClock)
+      : h("button", { class: "link-btn dark", onclick: () => { state.fixOpen = key; renderClock(); } }, "Fix…"),
+  );
+}
+
+function noShowCard(sh, idx, d) {
+  const key = `n${idx}`;
+  const run = async (_t, reason) => {
+    await addPunch(sh.staff_id, "in")(inEl.value, reason);
+    if (outEl.value) await addPunch(sh.staff_id, "out")(outEl.value, reason);
+  };
+  const inEl = h("input", { type: "datetime-local", "aria-label": "Clock-in time (Melbourne)", value: `${sh.date}T${sh.start}` });
+  const outEl = h("input", { type: "datetime-local", "aria-label": "Clock-out time (Melbourne)", value: `${sh.date}T${sh.end}` });
+  return h("article", { class: "clock-sess flagged" },
+    h("div", { class: "row1" }, h("b", {}, sh.name)),
+    h("div", { class: "meta" }, `Rostered ${fmtTime(sh.start)}–${fmtTime(sh.end)} · ${[sh.role, sh.location].filter(Boolean).join(" · ")}`),
+    h("div", { class: "flags" }, h("span", { class: "flag e" }, "Not clocked in")),
+    state.fixOpen === key
+      ? h("div", {}, h("p", { class: "hint" }, "If they worked, enter their actual times:"), h("label", {}, "In"), inEl, h("label", {}, "Out (optional)"), outEl,
+        fixForm(key, [{ label: "Add these times", run }], reloadClock))
+      : h("button", { class: "link-btn dark", onclick: () => { state.fixOpen = key; renderClock(); } }, "They worked — add times…"),
+  );
+}
+
+async function reloadClock() {
+  await loadClockDay(state.clockDay);
+  renderClock();
+}
+
+function renderClock() {
+  const d = state.clockData;
+  banner.hidden = true;
+  const isToday = d.day === d.today;
+  const nav = h("div", { class: "day-nav" },
+    h("button", { class: "cal-nav", "aria-label": "Previous day", onclick: async () => { state.fixOpen = null; await loadClockDay(shiftDays(d.day, -1)); renderClock(); } }, "‹"),
+    h("div", { class: "day-title" }, fmtDayLong(d.day), isToday ? h("span", { class: "today-pill" }, "Today") : null),
+    h("button", { class: "cal-nav", "aria-label": "Next day", disabled: isToday, onclick: async () => { state.fixOpen = null; await loadClockDay(shiftDays(d.day, 1)); renderClock(); } }, "›"),
+  );
+  const flaggedCount = d.sessions.filter((s) => s.flags.some((f) => f.level !== "info")).length + d.no_shows.length;
+  render(
+    h("div", { class: "page-head" }, h("h1", {}, "Clock"),
+      h("div", { class: "updated" }, h("button", { class: "icon-btn", onclick: reloadClock }, "Refresh"),
+        isToday ? null : h("button", { class: "icon-btn", onclick: async () => { await loadClockDay(null); renderClock(); } }, "Today"))),
+    nav,
+    d.roster_error ? h("p", { class: "form-error" }, `Roster unavailable (${d.roster_error}) — shifts can't be matched right now.`) : null,
+    !d.roster_known && !d.roster_error ? h("p", { class: "hint" }, "No roster tab for this month, so punches aren't compared with shifts.") : null,
+    d.on_clock.length ? h("section", { class: "on-clock" }, h("h2", { class: "month-title" }, "On the clock now"),
+      h("div", { class: "chips" }, d.on_clock.map((o) => h("span", { class: "chip big" }, `${o.name} · since ${ABClock.fmtDayTime(o.since, d.tz)}`)))) : null,
+    h("div", { class: "summary" },
+      h("span", { class: "ok" }, `${d.sessions.length} clock-in${d.sessions.length === 1 ? "" : "s"}`),
+      flaggedCount ? h("span", { class: "w" }, `${flaggedCount} to check`) : null),
+    d.no_shows.length ? [h("h2", { class: "month-title" }, "Rostered, not clocked in"), ...d.no_shows.map((sh, i) => noShowCard(sh, i, d))] : null,
+    h("h2", { class: "month-title" }, "Clock-ins"),
+    d.sessions.length ? d.sessions.map((s, i) => sessionCard(s, i, d)) : emptyCard("No clock-ins on this day"),
+  );
+}
+
 // ---------- routing ----------
 
 async function route() {
@@ -444,6 +688,9 @@ async function route() {
     if (state.tab === "mine") {
       if (!state.roster) { render(h("p", { class: "loading" }, "Loading your shifts…")); await loadMine(); }
       renderMine();
+    } else if (state.tab === "clock") {
+      if (!state.clockData) { render(h("p", { class: "loading" }, "Loading clock-ins…")); await loadClockDay(state.clockDay); }
+      renderClock();
     } else {
       if (!state.admin) { render(h("p", { class: "loading" }, "Loading roster…")); await loadAdmin(); renderTabbar(); }
       state.tab === "team" ? renderTeam() : renderIssues();
@@ -456,10 +703,12 @@ async function route() {
 }
 
 async function start() {
-  state.roster = null; state.admin = null; state.tab = "mine";
+  state.roster = null; state.admin = null; state.tab = "mine"; state.clockData = null; state.clockDay = null;
+  state.clock = null; state.clockMsg = null;
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
   await route();
+  flushMine();
   if (state.me.role === "admin") loadAdmin().then(renderTabbar).catch(() => {});
 }
 
@@ -473,6 +722,9 @@ async function boot() {
 }
 
 document.getElementById("logout").addEventListener("click", async () => {
+  await refreshPending();
+  if (state.pending && !confirm(`${state.pending} clock-in/out ${state.pending === 1 ? "hasn't" : "haven't"} been sent yet (no connection). `
+      + "If you log out, it will send next time you log in on this phone. Log out anyway?")) return;
   try { await api("/api/auth/logout", { method: "POST" }); } catch { /* offline: still clear locally */ }
   if (window.caches) caches.delete("ab-data").catch(() => {});
   if (navigator.serviceWorker && navigator.serviceWorker.controller) {
@@ -484,9 +736,14 @@ document.getElementById("logout").addEventListener("click", async () => {
 
 document.addEventListener("visibilitychange", () => {
   if (document.visibilityState === "visible" && state.me && !state.me.must_change_password) {
+    flushMine();
     if (state.tab === "mine") loadMine().then(renderMine).catch(() => {});
   }
 });
+
+// Send anything saved offline as soon as we can.
+window.addEventListener("online", () => flushMine());
+setInterval(() => { if (state.me && navigator.onLine) flushMine(); }, 30000);
 
 if ("serviceWorker" in navigator) {
   navigator.serviceWorker.register("/sw.js").catch(() => {});
