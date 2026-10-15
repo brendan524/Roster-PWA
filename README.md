@@ -6,7 +6,9 @@ A self-hosted PWA for AB Group staff. It replaces Frappe HR.
 
 **Stage 2:** clock in/out with a PIN, on a personal phone (with GPS) or at an office kiosk. Works offline. Admins get a daily **Clock** view with late, early, missing and unrostered flags, plus corrections with an audit trail.
 
-Later stages: leave (3), availability (4), and the pay report (5).
+**Stage 3a:** a **Leave** tab for everyone. Offshore balances build up automatically. Staff apply in the app; admins approve or decline from the same tab, which shows a badge when requests are waiting. (3b, reading onshore balances from Xero, is not built yet.)
+
+Later stages: availability (4) and the pay report (5).
 
 ```
 hr.abgroup.au ─► Traefik (existing) ─► roster-app (FastAPI + PWA) ─► roster-db (Postgres, private network)
@@ -52,6 +54,32 @@ hr.abgroup.au ─► Traefik (existing) ─► roster-app (FastAPI + PWA) ─►
 A lost tablet or a kiosk being retired: `python -m app.cli list-kiosks`, then `remove-kiosk <number>`. That device stops working straight away.
 
 **Limitation:** a kiosk can't check PINs while offline. If someone enters a wrong PIN with no connection, the punch can't be matched to anyone when it syncs, so it is dropped. Keep the kiosks on reliable Wi-Fi. Phones show the person an error if this happens.
+
+## Leave
+
+**Offshore policy:** the first 6 months are probation. Credits start at the **start of month 7** (the 6-month anniversary of the join date), then come on the same day each month after.
+- **Vacation:** +1 day per month, carried over. The balance never goes above **10 days**: a credit that would take it over is only partly given, or not given at all.
+- **Sick:** +0.5 day per month, carried over, with no limit.
+
+Balances aren't stored. They're recalculated each time from the join date, approved leave and admin adjustments, so they can't drift or double-count.
+
+**Applying:**
+- Staff choose a type, the dates, and whether the first and last days are half days. Weekdays count; weekends don't. **Public holidays aren't excluded**, so the approver checks them.
+- Overlapping requests are refused.
+- Asking for more than the available balance is allowed, but the request is flagged for the approver.
+- Staff can cancel a request while it's still waiting for approval. Approved leave can only be changed by an admin.
+
+**Before offshore balances show:**
+```bash
+docker compose exec roster-app python -m app.cli set-join-date AB0003 2025-03-15
+# Opening balance carried over from the old system (the final figure for that date):
+docker compose exec roster-app python -m app.cli leave-set AB0003 vacation 4.5 --as-of 2026-10-01 --reason "Carried over from Frappe"
+docker compose exec roster-app python -m app.cli leave-add AB0003 sick -1 --reason "Sick day 3 Oct, before the app"
+docker compose exec roster-app python -m app.cli leave-balance AB0003     # check the result and recent history
+```
+Adjustments can't be edited or deleted. To correct one, add another.
+
+**Onshore** staff can apply, but their balances are kept in Xero. Showing them in the app is Stage 3b.
 
 ## The roster sheet
 

@@ -8,7 +8,7 @@ const state = {
   me: null,
   roster: null,       // /api/roster/me
   admin: null,        // /api/admin/roster
-  tab: "mine",        // mine | clock | team | issues
+  tab: "mine",        // mine | leave | (admins) clock | team | issues
   view: localGet("view") || "list",  // list | calendar
   calIndex: 0,        // which of the two months the calendar shows
   selectedDay: null,  // "YYYY-MM-DD"
@@ -23,6 +23,10 @@ const state = {
   clockDay: null,     // admin clock view: "YYYY-MM-DD"
   clockData: null,    // /api/admin/clock
   fixOpen: null,      // which admin card has its fix form open
+  leave: null,        // /api/leave/me
+  leaveAdmin: null,   // /api/admin/leave
+  leaveFormOpen: false,
+  leaveMsg: null,
 };
 
 const app = document.getElementById("app");
@@ -100,7 +104,7 @@ function groupByDate(shifts) {
   return map;
 }
 
-function render(...nodes) { app.replaceChildren(...nodes.flat().filter((n) => n != null && n !== false)); }
+function render(...nodes) { app.replaceChildren(...nodes.flat(Infinity).filter((n) => n != null && n !== false)); }
 
 // ---------- screens: auth ----------
 
@@ -171,7 +175,7 @@ function setChrome(loggedIn) {
   document.body.classList.toggle("auth-screen", !loggedIn);
   document.getElementById("userbox").hidden = !loggedIn;
   document.getElementById("username").textContent = loggedIn && state.me ? state.me.name : "";
-  const showTabs = loggedIn && state.me && state.me.role === "admin" && !state.me.must_change_password;
+  const showTabs = loggedIn && state.me && !state.me.must_change_password;
   tabbar.hidden = !showTabs;
   if (!loggedIn) banner.hidden = true;
 }
@@ -183,9 +187,15 @@ function renderTabbar() {
     "aria-current": state.tab === id ? "page" : false,
     onclick: () => { state.tab = id; route(); },
   }, label, extra);
+  const pendingLeave = state.leaveAdmin ? state.leaveAdmin.pending.length : 0;
+  if (state.me.role !== "admin") {
+    tabbar.replaceChildren(tab("mine", "My shifts"), tab("leave", "Leave"));
+    return;
+  }
   tabbar.replaceChildren(
     tab("mine", "My shifts"),
     tab("clock", "Clock"),
+    tab("leave", "Leave", pendingLeave ? h("span", { class: "badge" }, pendingLeave) : null),
     tab("team", "Team"),
     tab("issues", "Issues", errors ? h("span", { class: "badge" }, errors) : null),
   );
@@ -539,6 +549,178 @@ function renderIssues() {
   );
 }
 
+// ---------- leave ----------
+
+async function loadLeave() {
+  const [mine, admin] = await Promise.all([
+    api("/api/leave/me"),
+    state.me.role === "admin" ? api("/api/admin/leave") : Promise.resolve(null),
+  ]);
+  state.leave = mine;
+  state.leaveAdmin = admin;
+}
+
+function fmtDays(n) { const v = Math.round(n * 10) / 10; return `${v} day${v === 1 ? "" : "s"}`; }
+function fmtRange(r) {
+  const a = fmtDay(r.start_date), b = fmtDay(r.end_date);
+  const halves = [r.start_half ? "half first day" : "", r.end_half && r.end_date !== r.start_date ? "half last day" : ""].filter(Boolean);
+  return `${r.start_date === r.end_date ? a : `${a} – ${b}`}${halves.length ? ` (${halves.join(", ")})` : ""}`;
+}
+
+// Mirrors the server's count (Mon–Fri, optional half days) for a live preview.
+function previewDays(start, end, sh, eh) {
+  if (!start || !end || end < start) return 0;
+  let n = 0;
+  for (let d = parseISO(start); iso(d) <= end; d.setDate(d.getDate() + 1)) if (d.getDay() % 6 !== 0) n += 1;
+  const wk = (x) => parseISO(x).getDay() % 6 !== 0;
+  if (sh && wk(start)) n -= 0.5;
+  if (eh && end !== start && wk(end)) n -= 0.5;
+  return Math.max(n, 0);
+}
+
+const STATUS_LABEL = { pending: "Waiting for approval", approved: "Approved", declined: "Declined", cancelled: "Cancelled" };
+
+function balanceCards(bals) {
+  return h("div", { class: "bal-grid" }, bals.map((b) => h("div", { class: "bal" },
+    h("div", { class: "bal-label" }, b.label),
+    h("div", { class: "bal-num" }, String(Math.round(b.available * 10) / 10), h("span", {}, " days")),
+    h("div", { class: "bal-sub" }, "available to book"),
+    b.booked ? h("div", { class: "bal-sub" }, `${fmtDays(b.booked)} booked ahead`) : null,
+    b.pending ? h("div", { class: "bal-sub" }, `${fmtDays(b.pending)} waiting for approval`) : null,
+    b.cap != null && b.balance >= b.cap ? h("div", { class: "bal-sub warn" }, `At the ${b.cap}-day maximum — use some to keep earning`) : null,
+    b.next_date ? h("div", { class: "bal-next" }, `+${b.next_amount} on ${fmtDay(b.next_date)}`) : null,
+  )));
+}
+
+function leaveForm(L) {
+  const avail = Object.fromEntries((L.balances || []).map((b) => [b.code, b.available]));
+  const err = h("p", { class: "form-error", hidden: true, role: "alert" });
+  const type = h("select", { id: "lt" }, L.types.map((t) => h("option", { value: t.code }, t.label)));
+  const start = h("input", { type: "date", id: "ls", min: shiftDays(L.today, -60), required: true });
+  const end = h("input", { type: "date", id: "le", required: true });
+  const sh = h("input", { type: "checkbox", id: "lsh" });
+  const eh = h("input", { type: "checkbox", id: "leh" });
+  const reason = h("input", { type: "text", id: "lr", maxlength: "500", placeholder: "Optional" });
+  const preview = h("p", { class: "leave-preview" });
+  const ehWrap = h("label", { class: "check", for: "leh" }, eh, " Last day is a half day");
+  const update = () => {
+    if (start.value && (!end.value || end.value < start.value)) end.value = start.value;
+    end.min = start.value || "";
+    ehWrap.hidden = !end.value || end.value === start.value;
+    const days = previewDays(start.value, end.value, sh.checked, eh.checked);
+    const a = avail[type.value];
+    preview.className = "leave-preview";
+    if (!start.value) { preview.textContent = ""; return; }
+    if (!days) { preview.textContent = "No working days (Mon–Fri) in those dates."; preview.classList.add("warn"); return; }
+    let text = `${fmtDays(days)} of leave.`;
+    if (a != null && days > a) { text += ` That's ${fmtDays(days - a)} more than you have available — you can still ask; your manager will decide.`; preview.classList.add("warn"); }
+    preview.textContent = text;
+  };
+  [type, start, end, sh, eh].forEach((el) => el.addEventListener("change", update));
+  const btn = h("button", { class: "btn", type: "submit" }, "Send request");
+  return h("form", {
+    class: "card leave-form", onsubmit: async (e) => {
+      e.preventDefault(); err.hidden = true; btn.disabled = true;
+      try {
+        await api("/api/leave/requests", { method: "POST", body: {
+          leave_type: type.value, start_date: start.value, end_date: end.value,
+          start_half: sh.checked, end_half: !ehWrap.hidden && eh.checked, reason: reason.value,
+        } });
+        state.leaveFormOpen = false;
+        state.leaveMsg = "Request sent. You'll see it here once it's approved.";
+        await loadLeave(); renderTabbar(); renderLeave();
+      } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
+    },
+  },
+    h("label", { for: "lt" }, "Type of leave"), type,
+    h("div", { class: "date-row" },
+      h("div", {}, h("label", { for: "ls" }, "From"), start),
+      h("div", {}, h("label", { for: "le" }, "To"), end)),
+    h("label", { class: "check", for: "lsh" }, sh, " First day is a half day"),
+    ehWrap,
+    h("label", { for: "lr" }, "Reason"), reason,
+    preview, err, btn,
+    h("button", { class: "link-btn dark", type: "button", onclick: () => { state.leaveFormOpen = false; renderLeave(); } }, "Cancel"),
+  );
+}
+
+function requestCard(r, { admin = false } = {}) {
+  const note = r.balance && r.balance.short_by ? h("div", { class: "flags" },
+    h("span", { class: "flag w" }, `${fmtDays(r.balance.short_by)} more than available (${fmtDays(r.balance.available)})`)) : null;
+  const balInfo = admin && r.balance && !r.balance.short_by
+    ? h("div", { class: "meta" }, `Balance after: ${fmtDays(r.balance.after)} (available now ${fmtDays(r.balance.available)})`)
+    : admin && r.balance_note ? h("div", { class: "meta" }, r.balance_note) : null;
+  const decided = r.decided_by && r.status !== "pending" && r.status !== "cancelled"
+    ? h("div", { class: "meta" }, `${STATUS_LABEL[r.status]} by ${r.decided_by}${r.decision_note ? ` — “${r.decision_note}”` : ""}`) : null;
+  return h("article", { class: `leave-req st-${r.status}` },
+    h("div", { class: "row1" }, h("b", {}, admin ? r.name : r.type_label), h("span", { class: `pill ${r.status}` }, STATUS_LABEL[r.status])),
+    admin ? h("div", { class: "meta" }, r.type_label) : null,
+    h("div", {}, `${fmtRange(r)} · ${fmtDays(r.days)}`),
+    r.reason ? h("div", { class: "meta" }, `“${r.reason}”`) : null,
+    note, balInfo, decided,
+    !admin && r.status === "pending" ? h("button", { class: "link-btn dark", onclick: async () => {
+      if (!confirm("Cancel this leave request?")) return;
+      try { await api(`/api/leave/requests/${r.id}/cancel`, { method: "POST" }); await loadLeave(); renderTabbar(); renderLeave(); }
+      catch (ex) { alert(ex.message); }
+    } }, "Cancel request") : null,
+    admin && r.status === "pending" ? decisionRow(r) : null,
+  );
+}
+
+function decisionRow(r) {
+  const note = h("input", { type: "text", placeholder: "Note to them (optional)", maxlength: "500" });
+  const go = (decision) => async (e) => {
+    e.target.disabled = true;
+    try { await api(`/api/admin/leave/${r.id}/decide`, { method: "POST", body: { decision, note: note.value } }); await loadLeave(); renderTabbar(); renderLeave(); }
+    catch (ex) { alert(ex.message); e.target.disabled = false; }
+  };
+  return h("div", { class: "decide" }, note,
+    h("div", { class: "decide-btns" },
+      h("button", { class: "btn small approve", onclick: go("approve") }, "Approve"),
+      h("button", { class: "btn small decline", onclick: go("decline") }, "Decline")));
+}
+
+function renderLeave() {
+  const L = state.leave;
+  const A = state.leaveAdmin;
+  banner.hidden = true;
+  const upcoming = L.requests.filter((r) => r.end_date >= L.today || r.status === "pending");
+  const past = L.requests.filter((r) => !upcoming.includes(r));
+  let balanceBlock;
+  if (L.balances) balanceBlock = balanceCards(L.balances);
+  else if (L.location_type === "offshore") balanceBlock = emptyCard("Balance not set up yet", "It'll show once your start date is added. You can still apply.");
+  else balanceBlock = h("p", { class: "hint" }, "Your leave balances are kept in Xero. Ask Brendan or Aaron for your current balance.");
+
+  render(
+    h("div", { class: "page-head" }, h("h1", {}, "Leave"),
+      h("div", { class: "updated" }, h("button", { class: "icon-btn", onclick: async () => { await loadLeave(); renderTabbar(); renderLeave(); } }, "Refresh"))),
+    A && A.pending.length ? [h("h2", { class: "month-title" }, `Waiting for your approval (${A.pending.length})`),
+      ...A.pending.map((r) => requestCard(r, { admin: true }))] : null,
+    A ? h("h2", { class: "month-title" }, "My leave") : null,
+    balanceBlock,
+    state.leaveMsg ? h("p", { class: "clock-msg ok", role: "status" }, state.leaveMsg) : null,
+    state.leaveFormOpen ? leaveForm(L)
+      : h("button", { class: "btn", onclick: () => { state.leaveFormOpen = true; state.leaveMsg = null; renderLeave(); } }, "Apply for leave"),
+    upcoming.length ? [h("h2", { class: "month-title" }, "Requests"), ...upcoming.map((r) => requestCard(r))] : null,
+    past.length ? [h("h2", { class: "month-title" }, "Past"), ...past.slice(0, 10).map((r) => requestCard(r))] : null,
+    A ? adminLeaveExtras(A) : null,
+  );
+}
+
+function adminLeaveExtras(A) {
+  const recent = A.recent.filter((r) => r.status !== "cancelled").slice(0, 15);
+  return [
+    h("h2", { class: "month-title" }, "Offshore balances"),
+    A.balances.length ? A.balances.map((s) => h("article", { class: "leave-req" },
+      h("div", { class: "row1" }, h("b", {}, s.name), h("span", { class: "meta" }, s.join_date ? `joined ${fmtDay(s.join_date)}` : "no join date")),
+      s.balances ? h("div", {}, s.balances.map((b) => `${b.label}: ${Math.round(b.balance * 10) / 10}`
+        + (b.booked ? ` (${Math.round(b.booked * 10) / 10} booked)` : "")).join(" · "))
+        : h("div", { class: "meta" }, "Set a join date to start their balance (python -m app.cli set-join-date …)"),
+    )) : emptyCard("No offshore staff"),
+    recent.length ? [h("h2", { class: "month-title" }, "Recent decisions"), ...recent.map((r) => requestCard(r, { admin: true }))] : null,
+  ];
+}
+
 // ---------- admin: clock day view ----------
 
 async function loadClockDay(day) {
@@ -688,6 +870,9 @@ async function route() {
     if (state.tab === "mine") {
       if (!state.roster) { render(h("p", { class: "loading" }, "Loading your shifts…")); await loadMine(); }
       renderMine();
+    } else if (state.tab === "leave") {
+      if (!state.leave) { render(h("p", { class: "loading" }, "Loading leave…")); await loadLeave(); }
+      renderLeave();
     } else if (state.tab === "clock") {
       if (!state.clockData) { render(h("p", { class: "loading" }, "Loading clock-ins…")); await loadClockDay(state.clockDay); }
       renderClock();
@@ -705,11 +890,15 @@ async function route() {
 async function start() {
   state.roster = null; state.admin = null; state.tab = "mine"; state.clockData = null; state.clockDay = null;
   state.clock = null; state.clockMsg = null;
+  state.leave = null; state.leaveAdmin = null; state.leaveFormOpen = false; state.leaveMsg = null;
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
   await route();
   flushMine();
-  if (state.me.role === "admin") loadAdmin().then(renderTabbar).catch(() => {});
+  if (state.me.role === "admin") {
+    loadAdmin().then(renderTabbar).catch(() => {});
+    api("/api/admin/leave").then((d) => { state.leaveAdmin = d; renderTabbar(); }).catch(() => {});
+  }
 }
 
 async function boot() {

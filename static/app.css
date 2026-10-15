@@ -245,3 +245,37 @@ input:focus, select:focus, button:focus-visible { outline: 3px solid rgba(9,195,
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip.big { font-size: 13px; padding: 5px 10px; margin: 0; }
 .on-clock { margin-bottom: 8px; }
+
+/* ---- leave ---- */
+.bal-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 10px; margin-bottom: 14px; }
+.bal { background: var(--white); border-radius: var(--radius); padding: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.05); border-top: 5px solid var(--blue); }
+.bal:nth-child(2) { border-top-color: var(--green); }
+.bal-label { font-weight: 700; font-size: 14px; color: var(--muted); }
+.bal-num { font-size: 34px; font-weight: 900; line-height: 1.1; margin-top: 4px; }
+.bal-num span { font-size: 15px; font-weight: 700; color: var(--muted); }
+.bal-sub { font-size: 13px; color: var(--muted); }
+.bal-sub.warn { color: var(--warn); font-weight: 700; }
+.bal-next { font-size: 13px; font-weight: 700; color: var(--green-dark); margin-top: 6px; }
+.leave-form { margin-bottom: 14px; }
+.leave-form .btn { margin-top: 14px; }
+.date-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); gap: 10px; }
+.date-row input { min-width: 0; }
+input[type=date] { width: 100%; padding: 11px 12px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--white); font-size: 16px; }
+label.check { display: flex; align-items: center; gap: 8px; font-weight: 400; margin: 12px 0 0; }
+label.check input { width: 20px; height: 20px; }
+.leave-preview { margin: 12px 0 0; font-weight: 700; }
+.leave-preview.warn { color: var(--warn); }
+.leave-req { background: var(--white); border-radius: 12px; padding: 12px 14px; margin-bottom: 10px; box-shadow: 0 1px 2px rgba(0,0,0,.05); border-left: 5px solid var(--line); }
+.leave-req.st-pending { border-left-color: var(--warn); }
+.leave-req.st-approved { border-left-color: var(--green); }
+.leave-req.st-declined { border-left-color: var(--error); }
+.leave-req .row1 { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 2px; }
+.leave-req .meta { font-size: 13px; color: var(--muted); margin-top: 2px; }
+.pill { font-size: 12px; font-weight: 700; padding: 3px 9px; border-radius: 999px; white-space: nowrap; background: #ECEEF0; color: var(--muted); }
+.pill.pending { background: var(--warn-bg); color: var(--warn); }
+.pill.approved { background: #EFF7E6; color: var(--green-dark); }
+.pill.declined { background: var(--error-bg); color: var(--error); }
+.decide { display: grid; gap: 8px; margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+.decide-btns { display: flex; gap: 10px; }
+.btn.approve { background: var(--green); }
+.btn.decline { background: #E9EDF0; color: var(--ink); }
