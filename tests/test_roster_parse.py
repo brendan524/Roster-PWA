@@ -115,14 +115,14 @@ def test_warnings_keep_the_shift():
             row(sched="3"),                                        # more than shift length
             row(d="2026-11-02"),                                   # wrong month tab
             row(dept="First Aid", sched="1", teach="1.5", start="09:00", end="10:00"),  # teaching > scheduled
-            row(dept="Gym", teach="0.5", start="11:00", end="12:00"),                  # teaching on non-FA
+            row(dept="Gym", start="11:00", end="12:00"),
             row(start="13:00", end="14:00"), row(start="13:00", end="14:00")]          # duplicate
     shifts, issues = parse_tab("2026-10", rows)
     assert len(shifts) == 7
     assert all(i.level == "warning" for i in issues)
     msgs = " | ".join(i.message for i in issues)
     for needle in ("after midnight", "more than the shift length", "isn't in this tab's month",
-                   "more than Scheduled Hours", "non-First Aid", "duplicate of row 7"):
+                   "more than Scheduled Hours", "duplicate of row 7"):
         assert needle in msgs
     assert shifts[0].overnight is True or any(s.overnight for s in shifts)
 
@@ -183,3 +183,10 @@ def test_unassigned_and_non_shift_rows_are_warnings_not_shifts():
         ("warning", "No one rostered for this shift yet."),
         ("warning", "Not a shift (no Staff ID or times), so it's ignored."),
     ]
+
+
+def test_teaching_hours_ignored_outside_first_aid():
+    shifts, issues = parse_tab("2026-10", [HEADER, row(dept="Fitness", teach="0.5"),
+                                           row(dept="First Aid", teach="0.5", start="09:00", end="10:00")])
+    assert issues == []
+    assert [s.teaching_hours for s in shifts] == [None, 0.5]

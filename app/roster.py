@@ -319,11 +319,12 @@ def parse_tab(tab: str, rows: list[list[Any]], month: str | None = None) -> tupl
             scheduled = round(span, 2)
         elif scheduled - span > 0.01:
             warnings.append(f"Scheduled Hours ({scheduled:g}) is more than the shift length ({span:.2f}h).")
-        if teaching is not None:
-            if teaching > scheduled + 0.001:
-                warnings.append(f"Teaching Hours ({teaching:g}) is more than Scheduled Hours ({scheduled:g}).")
-            if "first aid" not in _text(cell("department")).lower():
-                warnings.append("Teaching Hours is set on a non-First Aid shift.")
+        # Only First Aid pays teaching time differently (1.25x); every other shift is
+        # paid on total hours, so any Teaching Hours there are ignored.
+        if teaching is not None and "first aid" not in _text(cell("department")).lower():
+            teaching = None
+        if teaching is not None and teaching > scheduled + 0.001:
+            warnings.append(f"Teaching Hours ({teaching:g}) is more than Scheduled Hours ({scheduled:g}).")
         if tab_year and (shift_date.year, shift_date.month) != (tab_year, tab_month):
             warnings.append(f"Date {shift_date.isoformat()} isn't in this tab's month ({tab}).")
 
