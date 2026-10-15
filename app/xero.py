@@ -3,7 +3,8 @@
 Flow: an admin taps "Connect Xero" once and approves access in Xero. The app keeps
 an (encrypted) refresh token and syncs every few hours: it lists payroll employees,
 matches them to staff (exact name or email; admins can fix matches), and copies
-each matched person's leave balances.
+each matched person's leave balances — except casuals (no paid leave) and any
+leave type with "MYOB" in its name (old balances from the previous payroll).
 
 Xero refresh tokens rotate on every use and expire if unused for 60 days, so the
 periodic sync also keeps the connection alive.
@@ -186,6 +187,11 @@ def parse_xero_date(value) -> date | None:
         return None
 
 
+def shown_leave_type(name: str) -> bool:
+    """Old balances carried over from MYOB stay in Xero but are never shown in the app."""
+    return "myob" not in name.lower()
+
+
 def _norm(name: str) -> str:
     return re.sub(r"\s+", " ", (name or "").strip().lower())
 
@@ -244,8 +250,11 @@ def sync(db: Session, http=None) -> dict:
             data = api_get(db, http, f"Employees/{link.xero_employee_id}")
             emp = (data.get("Employees") or [{}])[0]
             link.start_date = parse_xero_date(emp.get("StartDate"))
+            link.employment_basis = ((emp.get("TaxDeclaration") or {}).get("EmploymentBasis") or "").upper()[:20]
             db.query(XeroLeaveBalance).filter_by(staff_id=link.staff_id).delete()
             for lb in emp.get("LeaveBalances") or []:
+                if link.employment_basis == "CASUAL" or not shown_leave_type(lb.get("LeaveName", "")):
+                    continue
                 db.add(XeroLeaveBalance(staff_id=link.staff_id, leave_type_id=lb["LeaveTypeID"],
                                         leave_name=lb.get("LeaveName", "Leave"),
                                         units=Decimal(str(lb.get("NumberOfUnits") or 0)),

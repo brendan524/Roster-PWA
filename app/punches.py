@@ -160,7 +160,7 @@ def record_punch(
         else:
             occurred_at = now  # live punch: the server's clock is the authority
 
-    if source != "admin":
+    if source not in ("admin", "auto"):
         # Double-tap: the person's latest punch is the same action, moments ago.
         # (If they did the opposite in between, e.g. in → out → in, it's a real new punch.)
         window = timedelta(seconds=get_settings().duplicate_window_seconds)
@@ -358,6 +358,8 @@ def analyse(
                                         "info"))
             if p.source == "admin":
                 sess.flags.append(_flag("admin_entry", f"{word.capitalize()} entered by admin", "info"))
+            if p.source == "auto":
+                sess.flags.append(_flag("auto", f"Automatic {word} (rostered time)", "info"))
 
     no_shows = [sh for sh in unmatched if bounds[id(sh)][0] + late_grace < now]
     return no_shows

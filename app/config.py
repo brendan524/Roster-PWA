@@ -50,6 +50,7 @@ class Settings(BaseSettings):
     xero_client_secret: str = ""
     xero_redirect_uri: str = ""  # e.g. https://hr.abgroup.au/api/admin/xero/callback
     xero_sync_hours: float = 6
+    auto_clock_minutes: float = 5  # how often auto-clock staff get their rostered punches (0 = off)
 
     # Roster source
     roster_source: Literal["google", "csv"] = "google"

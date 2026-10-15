@@ -51,6 +51,7 @@ def status(_: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
             "staff_id": s.staff_id, "name": s.name,
             "link": ({"xero_employee_id": links[s.staff_id].xero_employee_id, "xero_name": links[s.staff_id].xero_name,
                       "linked_by": links[s.staff_id].linked_by,
+                      "casual": links[s.staff_id].employment_basis == "CASUAL",
                       "start_date": (links[s.staff_id].start_date.isoformat()
                                      if links[s.staff_id].start_date else None)} if s.staff_id in links else None),
             "balances": balances_out(bal.get(s.staff_id, [])),

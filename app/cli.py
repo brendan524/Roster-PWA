@@ -284,6 +284,16 @@ def set_leave(staff_id: str, on: bool) -> int:
     return 0
 
 
+def set_auto_clock(staff_id: str, on: bool) -> int:
+    with SessionLocal() as db:
+        staff = _get(db, staff_id)
+        staff.auto_clock = on
+        db.commit()
+        print(f"{staff.name} ({staff.staff_id}): " + ("clocked in and out automatically at their rostered times."
+              if on else "clocks in and out themselves."))
+    return 0
+
+
 def leave_adjust(staff_id: str, leave_type: str, kind: str, amount: str, as_of: str | None, reason: str) -> int:
     from datetime import date as _date
     from decimal import Decimal, InvalidOperation
@@ -348,7 +358,7 @@ def leave_balance(staff_id: str) -> int:
 def list_staff() -> int:
     with SessionLocal() as db:
         for s in db.query(Staff).order_by(Staff.staff_id):
-            flags = [s.role, s.location_type] + ([] if s.has_leave else ["no-leave"]) + ([] if s.active else ["INACTIVE"])
+            flags = [s.role, s.location_type] + ([] if s.has_leave else ["no-leave"]) + (["auto-clock"] if s.auto_clock else []) + ([] if s.active else ["INACTIVE"])
             print(f"{s.staff_id:<8} {s.name:<22} {s.email or '-':<28} {s.department:<20} {' '.join(flags)}")
     return 0
 
@@ -370,6 +380,9 @@ def main(argv: list[str] | None = None) -> int:
     sl = sub.add_parser("set-leave", help="'no' for contractors (no leave, Leave tab hidden), 'yes' to undo")
     sl.add_argument("staff_id")
     sl.add_argument("value", choices=["yes", "no"])
+    ac = sub.add_parser("set-auto-clock", help="'yes' = clock in/out automatically at rostered start/end times")
+    ac.add_argument("staff_id")
+    ac.add_argument("value", choices=["yes", "no"])
     jd = sub.add_parser("set-join-date", help="needed before offshore leave can accrue")
     jd.add_argument("staff_id")
     jd.add_argument("date", help="YYYY-MM-DD or DD/MM/YYYY")
@@ -392,6 +405,8 @@ def main(argv: list[str] | None = None) -> int:
         return reset_password(a.staff_id, a.choose)
     if a.cmd == "set-pin":
         return set_pin(a.staff_id, a.choose)
+    if a.cmd == "set-auto-clock":
+        return set_auto_clock(a.staff_id, a.value == "yes")
     if a.cmd == "set-leave":
         return set_leave(a.staff_id, a.value == "yes")
     if a.cmd == "set-join-date":

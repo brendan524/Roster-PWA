@@ -173,7 +173,13 @@ docker compose exec roster-app python -m app.cli set-pin AB0003          # new r
 docker compose exec roster-app python -m app.cli deactivate AB0003       # can't log in; their shifts get flagged
 docker compose exec roster-app python -m app.cli list-kiosks
 docker compose exec roster-app python -m app.cli remove-kiosk 2          # lost/retired kiosk device
+docker compose exec roster-app python -m app.cli set-leave AB0012 no      # contractor: no leave, Leave tab hidden
+docker compose exec roster-app python -m app.cli set-auto-clock AB0001 yes  # clocked in/out at rostered start/end automatically
 ```
+
+Auto-clock (AB0001 and AB0002 by default) adds punches marked "automatic" at each rostered shift start
+and end, every few minutes. They show on the Clock page like any punch and can be removed or corrected.
+If the roster changes after a shift has started, check that day's punches.
 
 ### Backups
 

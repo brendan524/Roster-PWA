@@ -608,7 +608,8 @@ function xeroPanel(X) {
     X.staff.map((st) => h("div", { class: "xero-row" },
       h("div", {}, h("b", {}, st.name),
         st.balances.length ? h("div", { class: "meta" }, st.balances.map((b) => `${b.name}: ${fmtUnits(b.units, b.unit_type)}`).join(" · "))
-          : h("div", { class: "meta" }, st.link ? "No balances in Xero" : "Not linked — pick their Xero name"),
+          : h("div", { class: "meta" }, !st.link ? "Not linked — pick their Xero name"
+            : st.link.casual ? "Casual in Xero — no paid leave" : "No balances in Xero"),
         st.link && st.link.start_date ? h("div", { class: "meta" }, `Started ${parseISO(st.link.start_date).toLocaleDateString("en-AU", { day: "numeric", month: "short", year: "numeric" })} (long service shows to them after 7 years)`) : null),
       X.xero_employees.length ? h("select", { "aria-label": `Xero employee for ${st.name}`, onchange: async (e) => {
         try { await api("/api/admin/xero/link", { method: "POST", body: { staff_id: st.staff_id, xero_employee_id: e.target.value || null } });
@@ -818,6 +819,7 @@ function renderLeave() {
   const past = L.requests.filter((r) => !upcoming.includes(r));
   let balanceBlock;
   if (L.has_leave === false) balanceBlock = h("p", { class: "hint" }, "Contractors don't take leave through the app.");
+  else if (L.casual) balanceBlock = h("p", { class: "hint" }, "Casual staff don't have paid leave, but you can still ask for unpaid time off.");
   else if (L.balances) balanceBlock = balanceCards(L.balances);
   else if (L.location_type === "offshore") balanceBlock = emptyCard("Balance not set up yet", "It'll show once your start date is added. You can still apply.");
   else if (L.xero_balances) balanceBlock = xeroBalanceCards(L.xero_balances);
@@ -870,6 +872,7 @@ const FLAG_CLASS = { error: "e", warning: "w", info: "i" };
 function punchLine(label, p, tz) {
   if (!p) return h("div", { class: "pl missing" }, `${label}: —`);
   const where = p.source === "kiosk" ? `${p.kiosk || "Kiosk"} kiosk`
+    : p.source === "auto" ? "automatic (rostered time)"
     : p.source === "admin" ? `entered by ${p.created_by}${p.reason ? ` — “${p.reason}”` : ""}`
       : "phone";
   const map = p.geo && p.geo.status === "ok"

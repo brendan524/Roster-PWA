@@ -6,10 +6,12 @@ from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
+from app import autoclock
 from app import xero as xero_sync
 from app.api import auth, clock, leave, roster, xero
 from app.config import get_settings
 from app.db import SessionLocal, engine
+from app.deps import get_roster_service
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
 
@@ -57,6 +59,7 @@ app.include_router(xero.router)
 @app.on_event("startup")
 def _start_background_jobs():
     xero_sync.start_background_sync(SessionLocal, get_settings().xero_sync_hours)
+    autoclock.start_background(SessionLocal, get_roster_service, get_settings().auto_clock_minutes)
 
 
 @app.get("/kiosk", include_in_schema=False)

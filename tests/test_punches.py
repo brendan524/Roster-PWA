@@ -435,3 +435,42 @@ def test_in_out_in_within_a_minute_keeps_all_three(sonya):
         assert r.json()["duplicate"] is False, kind
     assert [p.kind for p in punches_for("AB0010")] == ["in", "out", "in"]
     assert sonya.get("/api/clock/me").json()["clocked_in"] is True
+
+
+def test_auto_clock_at_rostered_times(client, source):
+    from app import autoclock
+    from app.deps import get_roster_service
+    from app.models import PunchVoid
+
+    add_staff("AB0001", None, role="admin")
+    add_staff("AB0010", None)  # clocks normally: never auto-punched
+    with SessionLocal() as db:
+        db.get(Staff, "AB0001").auto_clock = True
+        db.commit()
+    today = utcnow().astimezone(MEL).date()
+    source.tabs = {f"{today:%Y-%m}": [HEADER,
+                                      [today.isoformat(), "AB0001", "Brendan", "Admin", "Office", "09:00", "17:00", "AB HQ", "", "", ""],
+                                      [today.isoformat(), "AB0010", "Sonya", "Fitness", "Cardio", "09:00", "17:00", "AB HQ", "", "", ""]]}
+    service = app.dependency_overrides[get_roster_service]()
+    start = datetime.combine(today, datetime.min.time().replace(hour=9), MEL).astimezone(UTC)
+    end = start + timedelta(hours=8)
+    with SessionLocal() as db:
+        assert autoclock.run(db, service, now=start - timedelta(minutes=1)) == 0  # not started yet
+        assert autoclock.run(db, service, now=start + timedelta(hours=1)) == 1  # clocked in at 9:00
+        assert autoclock.run(db, service, now=end + timedelta(minutes=5)) == 1  # clocked out at 17:00
+        assert autoclock.run(db, service, now=end + timedelta(minutes=10)) == 0  # never doubled
+    ps = punches_for("AB0001")
+    assert [(p.kind, p.source, p.occurred_at) for p in ps] == [("in", "auto", start), ("out", "auto", end)]
+    assert punches_for("AB0010") == []
+
+    # An admin removing an automatic punch sticks: the job doesn't put it back.
+    with SessionLocal() as db:
+        db.add(PunchVoid(punch_id=ps[1].id, voided_by="AB0001", reason="left early"))
+        db.commit()
+        assert autoclock.run(db, service, now=end + timedelta(minutes=15)) == 0
+
+    # The admin day view shows it as automatic, on time, no warnings.
+    login(client, "AB0001")
+    day = client.get(f"/api/admin/clock?day={today.isoformat()}").json()
+    s = next(x for x in day["sessions"] if x["staff_id"] == "AB0001")
+    assert {f["code"] for f in s["flags"]} <= {"auto", "on_clock", "no_clock_out"}

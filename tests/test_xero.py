@@ -69,7 +69,8 @@ class FakeXero:
             return R(200, {"Employees": emps[(page - 1) * 100: page * 100]})
         eid = path.split("/")[1]
         e = self.employees[eid]
-        return R(200, {"Employees": [{"EmployeeID": eid, "StartDate": e.get("start"), "LeaveBalances": [
+        return R(200, {"Employees": [{"EmployeeID": eid, "StartDate": e.get("start"),
+                                      "TaxDeclaration": {"EmploymentBasis": e.get("basis", "PARTTIME")}, "LeaveBalances": [
             {"LeaveName": n, "LeaveTypeID": f"{eid}-{n}", "NumberOfUnits": u, "TypeOfUnits": "Hours"}
             for n, u in e["balances"].items()]}]})
 
@@ -82,7 +83,8 @@ def fake(monkeypatch):
     monkeypatch.setattr(s, "xero_redirect_uri", "https://hr.example/api/admin/xero/callback")
     f = FakeXero({
         "E1": {"first": "Ab0010", "last": "", "start": "/Date(1704067200000+0000)/",  # 1 Jan 2024
-               "balances": {"Annual Leave": 52.5, "Personal/Carer's Leave": 30.4, "Long Service Leave": 40}},
+               "balances": {"Annual Leave": 52.5, "Personal/Carer's Leave": 30.4, "Long Service Leave": 40,
+                            "MYOB Annual Leave": 12}},
         "E2": {"first": "Somebody", "last": "Else", "email": "jody@example.com", "balances": {"Annual Leave": 8}},
         "E3": {"first": "Twin", "last": "Name", "balances": {"Annual Leave": 1}},
         "E4": {"first": "Twin", "last": "Name", "balances": {"Annual Leave": 2}},
@@ -267,3 +269,20 @@ def test_contractors_have_no_leave(admin, fake):
 ])
 def test_parse_xero_date(value, expected):
     assert xero.parse_xero_date(value) == expected
+
+
+def test_myob_balances_never_shown_and_casuals_have_none(admin, fake):
+    fake.employees["E2"]["basis"] = "CASUAL"
+    connect(admin)
+    with SessionLocal() as db:
+        names = {(b.staff_id, b.leave_name) for b in db.query(XeroLeaveBalance)}
+    assert ("AB0010", "MYOB Annual Leave") not in names and ("AB0010", "Annual Leave") in names
+    assert not any(sid == "AB0016" for sid, _ in names)  # casual: nothing copied
+    row = next(s for s in admin.get("/api/admin/xero/status").json()["staff"] if s["staff_id"] == "AB0016")
+    assert row["link"]["casual"] is True and row["balances"] == []
+    admin.post("/api/auth/logout")
+    login(admin, "AB0016")
+    me = admin.get("/api/leave/me").json()
+    assert me["casual"] is True and [t["code"] for t in me["types"]] == ["unpaid"]
+    assert admin.post("/api/leave/requests", json={"leave_type": "annual", "start_date": "2027-01-04",
+                                                   "end_date": "2027-01-04", "reason": "Holiday"}).status_code == 400

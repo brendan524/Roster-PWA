@@ -22,6 +22,7 @@ class Staff(Base):
     notes: Mapped[str] = mapped_column(String(500), default="")
     role: Mapped[str] = mapped_column(String(10), default="staff")  # "staff" | "admin"
     has_leave: Mapped[bool] = mapped_column(Boolean, default=True)  # False for contractors: no leave in the app
+    auto_clock: Mapped[bool] = mapped_column(Boolean, default=False)  # clocked in/out at rostered times automatically
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     password_hash: Mapped[str | None] = mapped_column(String(255))
@@ -91,7 +92,7 @@ class Punch(Base):
     client_id: Mapped[str] = mapped_column(String(64), unique=True)
     staff_id: Mapped[str] = mapped_column(ForeignKey("staff.staff_id"), index=True)
     kind: Mapped[str] = mapped_column(String(3))  # "in" | "out"
-    source: Mapped[str] = mapped_column(String(10))  # "personal" | "kiosk" | "admin"
+    source: Mapped[str] = mapped_column(String(10))  # "personal" | "kiosk" | "admin" | "auto"
     kiosk_id: Mapped[int | None] = mapped_column(ForeignKey("kiosks.id"))
 
     # The moment the punch happened (UTC). Server time when sent live; for
@@ -192,6 +193,7 @@ class XeroEmployeeLink(Base):
     xero_name: Mapped[str] = mapped_column(String(200), default="")
     linked_by: Mapped[str] = mapped_column(String(32))  # "auto" or an admin's staff id
     start_date: Mapped[date | None] = mapped_column(Date)  # employment start in Xero (long service)
+    employment_basis: Mapped[str] = mapped_column(String(20), default="")  # FULLTIME / PARTTIME / CASUAL ...
 
 
 class XeroLeaveBalance(Base):

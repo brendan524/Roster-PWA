@@ -70,16 +70,18 @@ def is_long_service(name: str) -> bool:
     return "long service" in name.lower()
 
 
-def types_for(staff: Staff, long_service: bool = False) -> list[LeaveType]:
+def types_for(staff: Staff, long_service: bool = False, casual: bool = False) -> list[LeaveType]:
     if not staff.has_leave:
         return []
     if staff.location_type == "offshore":
         return OFFSHORE_TYPES
+    if casual:  # casuals have no paid leave; they can still ask for time off
+        return [t for t in ONSHORE_TYPES if t.code == "unpaid"]
     return [t for t in ONSHORE_TYPES if long_service or t.code != "long_service"]
 
 
-def type_by_code(staff: Staff, code: str, long_service: bool = False) -> LeaveType | None:
-    return next((t for t in types_for(staff, long_service) if t.code == code), None)
+def type_by_code(staff: Staff, code: str, long_service: bool = False, casual: bool = False) -> LeaveType | None:
+    return next((t for t in types_for(staff, long_service, casual) if t.code == code), None)
 
 
 def label_for(staff: Staff, code: str) -> str:

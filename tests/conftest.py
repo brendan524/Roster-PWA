@@ -6,6 +6,7 @@ os.environ.setdefault("DATABASE_URL", os.environ.get(
 os.environ["PIN_PEPPER"] = "test-pepper"
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["ROSTER_SOURCE"] = "csv"
+os.environ["AUTO_CLOCK_MINUTES"] = "0"  # tests run the job directly
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402

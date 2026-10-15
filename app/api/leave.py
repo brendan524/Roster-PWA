@@ -87,6 +87,12 @@ def _long_service_ok(db: Session, staff: Staff) -> bool:
     return staff.location_type == "onshore" and long_service_ok(service_start(db, staff), today())
 
 
+def _is_casual(db: Session, staff: Staff) -> bool:
+    """Casual in Xero payroll (onshore only)."""
+    link = db.get(XeroEmployeeLink, staff.staff_id) if staff.location_type == "onshore" else None
+    return bool(link and link.employment_basis == "CASUAL")
+
+
 def _xero_out(db: Session, staff: Staff) -> list[dict] | None:
     if staff.location_type != "onshore" or not staff.has_leave:
         return None
@@ -117,9 +123,10 @@ def my_leave(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db))
     return {
         "location_type": staff.location_type,
         "has_leave": staff.has_leave,
+        "casual": _is_casual(db, staff),
         "join_date": staff.join_date.isoformat() if staff.join_date else None,
         "types": [{"code": t.code, "label": t.label, "has_balance": t.accrual is not None,
-                   "advance_only": t.advance_only} for t in types_for(staff, _long_service_ok(db, staff))],
+                   "advance_only": t.advance_only} for t in types_for(staff, _long_service_ok(db, staff), _is_casual(db, staff))],
         "max_backdate_days": MAX_BACKDATE_DAYS,
         "balances": _balances_out(db, staff, history=12),
         "xero_balances": _xero_out(db, staff),
@@ -141,7 +148,7 @@ class LeaveIn(BaseModel):
 def apply_for_leave(body: LeaveIn, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db)):
     if not staff.has_leave:
         raise HTTPException(400, "Contractors don't take leave through the app — talk to Brendan or Aaron.")
-    lt = type_by_code(staff, body.leave_type, _long_service_ok(db, staff))
+    lt = type_by_code(staff, body.leave_type, _long_service_ok(db, staff), _is_casual(db, staff))
     if lt is None:
         raise HTTPException(400, "That leave type isn't available to you.")
     if body.end_date < body.start_date:
