@@ -28,8 +28,18 @@ class Settings(BaseSettings):
     max_failed_logins: int = 5
     lockout_minutes: int = 15
 
-    # PINs (clock-in credential, used from Stage 2)
+    # PINs (clock-in credential)
     pin_length: int = 6
+    max_pin_failures: int = 5
+    personal_pin_lock_minutes: int = 15
+    kiosk_pin_lock_seconds: int = 60
+
+    # Clock in/out
+    late_grace_minutes: int = 10  # later than this after shift start = flagged late
+    early_grace_minutes: int = 10  # earlier than this before shift end = flagged early finish
+    duplicate_window_seconds: int = 60  # same person, same action, within this = one punch
+    # Kiosk locations offered at setup: "Name:onshore|offshore", comma-separated.
+    kiosk_locations: str = "AB HQ:onshore,WrkPod:offshore"
 
     # Roster source
     roster_source: Literal["google", "csv"] = "google"

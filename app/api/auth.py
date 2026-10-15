@@ -56,10 +56,10 @@ def _set_cookie(response: Response, token: str) -> None:
     )
 
 
-@router.post("/login")
-def login(body: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
+def authenticate(db: Session, login_id: str, password: str) -> Staff:
+    """Check a Staff ID/email + password, with lockout. Raises HTTPException on failure."""
     s = get_settings()
-    ident = body.login.strip()
+    ident = login_id.strip()
     if "@" in ident:
         staff = db.query(Staff).filter_by(email=ident.lower()).first()
     else:
@@ -68,7 +68,7 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
     if staff is not None and staff.locked_until and staff.locked_until > now():
         raise HTTPException(429, "Too many attempts. Try again in a few minutes.")
 
-    ok = verify_password(staff.password_hash if staff else None, body.password)
+    ok = verify_password(staff.password_hash if staff else None, password)
     if staff is None or not staff.active or not ok:
         if staff is not None and staff.active:
             staff.failed_logins += 1
@@ -81,6 +81,12 @@ def login(body: LoginIn, request: Request, response: Response, db: Session = Dep
     staff.failed_logins = 0
     staff.locked_until = None
     db.commit()
+    return staff
+
+
+@router.post("/login")
+def login(body: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
+    staff = authenticate(db, body.login, body.password)
     token = create_session(db, staff, request.headers.get("user-agent", ""))
     _set_cookie(response, token)
     return me_payload(staff)

@@ -6,7 +6,7 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
-from app.api import auth, roster
+from app.api import auth, clock, roster
 from app.db import engine
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -47,6 +47,7 @@ async def security(request: Request, call_next):
 
 app.include_router(auth.router)
 app.include_router(roster.router)
+app.include_router(clock.router)
 
 
 @app.get("/api/health")
