@@ -37,7 +37,7 @@ def migrated_db():
 @pytest.fixture(autouse=True)
 def clean_db(migrated_db):
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE auth_sessions, staff, xero_connection, email_outbox, app_state CASCADE"))
+        conn.execute(text("TRUNCATE auth_sessions, staff, xero_connection, email_outbox, app_state, venues, travel_legs, pay_reports CASCADE"))
     yield
 
 

@@ -572,3 +572,25 @@ class RosterService:
 
             self._snapshot = RosterSnapshot(month_tabs, issues, now)
             return self._snapshot
+
+    def shifts_between(self, start: date, end: date) -> list[Shift]:
+        """Shifts between two dates (inclusive) from whichever month tabs cover them, read fresh.
+        Used for pay reports, which can reach back into earlier months. Raises if the sheet
+        can't be read or a month has no (or more than one) tab."""
+        months, d = [], date(start.year, start.month, 1)
+        while d <= end:
+            months.append(month_tab(d))
+            d = date(d.year + (d.month == 12), d.month % 12 + 1, 1)
+        titles = self.source.tab_titles()
+        wanted = {}
+        for m in months:
+            found = [t for t in titles if month_of_title(t) == m]
+            if len(found) != 1:
+                raise RosterUnavailable(f"The roster sheet has {'no' if not found else 'more than one'} tab for {m}.")
+            wanted[m] = found[0]
+        tabs = self.source.read_tabs(list(wanted.values()))
+        out: list[Shift] = []
+        for m, t in wanted.items():
+            shifts, _issues = parse_tab(t, tabs[t], month=m)
+            out.extend(s for s in shifts if start <= s.date <= end)
+        return out

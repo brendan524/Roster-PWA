@@ -63,6 +63,16 @@ class Settings(BaseSettings):
     digest_hour: int = 7  # daily admin digest, local time; -1 = off
     jobs_enabled: bool = True  # background email/alert jobs (off in tests)
 
+    # Pay report (fortnightly, emailed the Monday after each period ends)
+    pay_period_end: str = "2026-10-04"  # any past period's last day (a Sunday); periods repeat every 14 days
+    pay_report_email: str = ""  # defaults to ALERT_EMAIL
+    pay_report_hour: int = 6  # local time on the Monday; -1 = don't email
+    pay_day_offset_days: int = 3  # pay day = period end + this
+    office_address: str = ""  # where travel to client sites is measured from
+    google_maps_api_key: str = ""  # Routes API, for km/drive time to client sites (optional)
+    grand_final_fridays: str = "2026-09-25"  # Vic public holiday, set each year once announced
+    extra_public_holidays: str = ""  # any other one-off public holidays, comma-separated YYYY-MM-DD
+
     # Roster source
     roster_source: Literal["google", "csv"] = "google"
     roster_sheet_id: str = ""

@@ -23,6 +23,9 @@ class Staff(Base):
     role: Mapped[str] = mapped_column(String(10), default="staff")  # "staff" | "admin"
     has_leave: Mapped[bool] = mapped_column(Boolean, default=True)  # False for contractors: no leave in the app
     auto_clock: Mapped[bool] = mapped_column(Boolean, default=False)  # clocked in/out at rostered times automatically
+    # First Aid trainers: teaching hours delivered before the app started counting (800-hour progression).
+    teaching_hours_opening: Mapped[float] = mapped_column(Float, default=0)
+    teaching_hours_as_of: Mapped[date | None] = mapped_column(Date)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     password_hash: Mapped[str | None] = mapped_column(String(255))
@@ -265,3 +268,41 @@ class AppState(Base):
     key: Mapped[str] = mapped_column(String(60), primary_key=True)
     value: Mapped[str] = mapped_column(String(500), default="")
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class Venue(Base):
+    """A roster Location, with how to treat it for travel: a permanent campus (no travel paid)
+    or a client site (travel time and km paid from the office)."""
+
+    __tablename__ = "venues"
+
+    name: Mapped[str] = mapped_column(String(120), primary_key=True)  # lower-cased roster Location
+    label: Mapped[str] = mapped_column(String(120))  # as written in the roster
+    kind: Mapped[str] = mapped_column(String(10), default="unknown")  # campus | client | unknown
+    address: Mapped[str] = mapped_column(String(300), default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), onupdate=func.now())
+
+
+class TravelLeg(Base):
+    """Cached driving distance/time between two places (addresses), from Google Maps or typed in."""
+
+    __tablename__ = "travel_legs"
+
+    origin: Mapped[str] = mapped_column(String(300), primary_key=True)
+    destination: Mapped[str] = mapped_column(String(300), primary_key=True)
+    km: Mapped[float] = mapped_column(Float)
+    minutes: Mapped[float] = mapped_column(Float)
+    source: Mapped[str] = mapped_column(String(10), default="google")  # google | manual
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class PayReport(Base):
+    """The pay report as emailed for a fortnight (kept so it can be looked back on, and for the teaching-hours tracker)."""
+
+    __tablename__ = "pay_reports"
+
+    period_end: Mapped[date] = mapped_column(Date, primary_key=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    data: Mapped[str] = mapped_column(String)  # JSON
+    generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    emailed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))

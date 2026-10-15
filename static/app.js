@@ -28,6 +28,9 @@ const state = {
   leaveFormOpen: false,
   leaveMsg: null,
   xero: null,         // /api/admin/xero/status (admins)
+  clockView: "day",   // day | pay (admin Clock tab)
+  pay: null,          // /api/admin/pay
+  venues: null,       // /api/admin/venues
   avail: null,        // /api/availability/me
   availDateOpen: false,
   availMsg: null,
@@ -1132,7 +1135,134 @@ async function reloadClock() {
   renderClock();
 }
 
+// ---------- pay report (admin) ----------
+
+const EMP_LABEL = { casual: "Casual", "part-time": "Part-time", "full-time": "Full-time", contractor: "Contractor",
+  salaried: "Salaried (offshore)", unknown: "Employment type unknown" };
+
+function fmtLongDate(s) { return parseISO(s).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", year: "numeric" }); }
+
+async function renderPay(end, reload = false) {
+  const head = (extra) => [h("div", { class: "page-head" }, h("h1", {}, "Pay report"), extra || null), clockSwitch()];
+  if (!state.pay || reload || (end && state.pay.period_end !== end)) {
+    render(head(), h("p", { class: "loading" }, "Working out the pay report…"));
+    try {
+      [state.pay, state.venues] = await Promise.all([
+        api("/api/admin/pay" + (end ? `?end=${end}` : (state.pay ? `?end=${state.pay.period_end}` : ""))),
+        api("/api/admin/venues"),
+      ]);
+    } catch (ex) { return render(head(), emptyCard("Couldn't make the pay report", ex.message)); }
+  }
+  const R = state.pay;
+  const open = state.payOpen || (state.payOpen = new Set());
+  const periodSel = h("select", { "aria-label": "Pay period", onchange: (e) => renderPay(e.target.value) },
+    R.periods.map((p) => h("option", { value: p.end, selected: p.end === R.period_end },
+      `${fmtDay(p.start)} – ${fmtDay(p.end)}${p.end === R.periods[0].end ? " (current)" : ""}`)));
+  const checks = R.people.reduce((n, p) => n + p.flags.length, 0);
+  const groups = [
+    ["Enter in Xero", (p) => ["casual", "part-time", "full-time", "unknown"].includes(p.employment)],
+    ["Contractors — check against invoices", (p) => p.employment === "contractor"],
+    ["Offshore — salaried", (p) => p.employment === "salaried"],
+  ];
+  const card = (p) => h("article", { class: "pay-card" },
+    h("div", { class: "row1" }, h("b", {}, p.name), h("span", { class: "meta" }, [EMP_LABEL[p.employment] || p.employment, ...p.teams].join(" · "))),
+    p.employment === "contractor"
+      ? h("div", { class: "meta" }, `Clocked ${p.shifts.reduce((n, s) => n + (s.clocked_hours || 0), 0)} h · rostered ${p.shifts.reduce((n, s) => n + s.rostered_hours, 0)} h`)
+      : (p.items.length ? h("table", { class: "pay-items" }, p.items.map((it) => h("tr", {}, h("td", {}, it.item), h("td", {}, String(it.qty)))))
+        : h("div", { class: "meta" }, "Nothing to pay this period")),
+    p.leave.map((l) => h("div", { class: "pay-leave" }, `Leave: ${l}`)),
+    p.flags.length ? h("ul", { class: "pay-flags" }, p.flags.map((f) => h("li", {}, f))) : null,
+    p.shifts.length ? h("button", { class: "link-btn dark small", onclick: () => { open.has(p.staff_id) ? open.delete(p.staff_id) : open.add(p.staff_id); renderPay(); } },
+      open.has(p.staff_id) ? "Hide shifts" : `Show ${p.shifts.length} shift${p.shifts.length === 1 ? "" : "s"}`) : null,
+    open.has(p.staff_id) ? h("table", { class: "pay-shifts" },
+      h("tr", {}, h("th", {}, "Day"), h("th", {}, "Rostered"), h("th", {}, "Clocked"), h("th", {}, "Paid")),
+      p.shifts.flatMap((s) => [
+        h("tr", {}, h("td", {}, fmtDay(s.date)), h("td", {}, `${s.start}–${s.end}`),
+          h("td", {}, s.clock_in || s.clock_out ? `${s.clock_in || "?"}–${s.clock_out || "?"}` : "—"),
+          h("td", {}, s.teaching_rostered != null ? `${s.teaching_rostered} teach` : (s.paid_hours != null ? `${s.paid_hours} h` : ""))),
+        s.notes.length || s.travel ? h("tr", { class: "sub" }, h("td", { colspan: "4" },
+          [s.location, s.travel ? `${s.travel.km} km, ${s.travel.hours} h travel` : "", ...s.notes].filter(Boolean).join(" · "))) : null,
+      ].filter(Boolean))) : null,
+  );
+  render(
+    head(h("div", { class: "updated" }, h("button", { class: "icon-btn", onclick: () => renderPay(R.period_end, true) }, "Refresh"))),
+    periodSel,
+    h("p", { class: "hint" }, `${fmtLongDate(R.period_start)} – ${fmtLongDate(R.period_end)} · pay day ${fmtLongDate(R.pay_day)}`
+      + (R.emailed_at ? ` · emailed ${fmtAgo(R.emailed_at)}` : R.current ? " · still in progress" : "")),
+    h("div", { class: "summary" }, checks ? h("span", { class: "w" }, `${checks} to check`) : h("span", { class: "ok" }, "Nothing flagged"),
+      h("button", { class: "icon-btn", onclick: async (e) => {
+        if (!confirm(`Email this report to ${R.email_to || "(no address set)"}?`)) return;
+        e.target.disabled = true;
+        try { await api(`/api/admin/pay/email?end=${R.period_end}`, { method: "POST" }); alert("Sent."); }
+        catch (ex) { alert(ex.message); } finally { e.target.disabled = false; }
+      } }, "Email it")),
+    groups.map(([title, test]) => {
+      const ppl = R.people.filter(test);
+      return ppl.length ? [h("h2", { class: "month-title" }, title), ppl.map(card)] : null;
+    }),
+    R.people.length ? null : emptyCard("No shifts in this period"),
+    R.tracker.length ? [h("h2", { class: "month-title" }, "First Aid teaching hours"), teachingTracker(R)] : null,
+    venuesPanel(),
+  );
+}
+
+function teachingTracker(R) {
+  return h("div", { class: "card pay-card" },
+    h("p", { class: "hint" }, "Progression every 800 teaching hours. Totals include this period."),
+    R.tracker.map((t) => h("div", { class: "tracker-row" },
+      h("div", {}, h("b", {}, t.name), t.reached ? h("span", { class: "pill new" }, `Reached ${t.reached.toLocaleString()} h`) : null),
+      h("div", { class: "meta" }, `${t.total.toLocaleString()} h · next milestone ${t.next_milestone.toLocaleString()} h`),
+      h("button", { class: "link-btn dark small", onclick: async () => {
+        const hrs = prompt(`${t.name}: teaching hours delivered up to the end of the last pay period before the app (e.g. 1650)`, String(t.opening || ""));
+        if (hrs === null) return;
+        const asOf = prompt("Up to which date? (YYYY-MM-DD)", t.opening_as_of || "2026-10-04");
+        if (!asOf) return;
+        try { await api("/api/admin/teaching-hours", { method: "POST", body: { staff_id: t.staff_id, hours: Number(hrs), as_of: asOf } }); renderPay(R.period_end, true); }
+        catch (ex) { alert(ex.message); }
+      } }, "Set starting hours"))));
+}
+
+function venuesPanel() {
+  const V = state.venues;
+  if (!V || !V.venues.length) return null;
+  const unknown = V.venues.filter((v) => v.kind === "unknown").length;
+  return [h("h2", { class: "month-title" }, `First Aid venues${unknown ? ` (${unknown} to set up)` : ""}`),
+    h("p", { class: "hint" }, "Campus = gear kept there, no travel paid. Client site = travel time and km paid from the office"
+      + (V.office_address ? ` (${V.office_address}).` : " — set OFFICE_ADDRESS on the server first.")
+      + (V.maps ? " Distances are looked up on Google Maps." : " Type the one-way km and minutes from the office.")),
+    V.venues.map((v) => {
+      const kind = h("select", { "aria-label": `${v.label} type` },
+        [["unknown", "Not set"], ["campus", "Campus"], ["client", "Client site"]].map(([k, l]) => h("option", { value: k, selected: v.kind === k }, l)));
+      const addr = h("input", { type: "text", value: v.address, placeholder: "Street address (for client sites)", "aria-label": `${v.label} address` });
+      const km = h("input", { type: "text", inputmode: "decimal", value: v.km ?? "", placeholder: "km", "aria-label": `${v.label} km one way` });
+      const mins = h("input", { type: "text", inputmode: "numeric", value: v.minutes ?? "", placeholder: "min", "aria-label": `${v.label} minutes one way` });
+      const save = h("button", { class: "btn small", onclick: async () => {
+        save.disabled = true;
+        const manual = !V.maps && km.value && mins.value;
+        try {
+          await api("/api/admin/venues", { method: "POST", body: { name: v.label, kind: kind.value, address: addr.value,
+            km: manual ? Number(km.value) : null, minutes: manual ? Number(mins.value) : null } });
+          state.venues = await api("/api/admin/venues"); renderPay(state.pay.period_end, true);
+        } catch (ex) { alert(ex.message); save.disabled = false; }
+      } }, "Save");
+      return h("div", { class: "card venue" },
+        h("b", {}, v.label), kind, addr,
+        V.maps ? (v.km != null ? h("div", { class: "meta" }, `${v.km} km, ${Math.round(v.minutes)} min each way from the office`) : null)
+          : h("div", { class: "venue-km" }, km, mins, h("span", { class: "meta" }, "one way")),
+        save);
+    })];
+}
+
+function clockSwitch() {
+  return h("div", { class: "segmented", role: "group", "aria-label": "Show" },
+    [["day", "Clock-ins"], ["pay", "Pay report"]].map(([v, label]) => h("button", {
+      "aria-pressed": (state.clockView || "day") === v ? "true" : "false",
+      onclick: () => { state.clockView = v; renderClock(); },
+    }, label)));
+}
+
 function renderClock() {
+  if (state.clockView === "pay") return renderPay();
   const d = state.clockData;
   banner.hidden = true;
   const isToday = d.day === d.today;
@@ -1146,6 +1276,7 @@ function renderClock() {
     h("div", { class: "page-head" }, h("h1", {}, "Clock"),
       h("div", { class: "updated" }, h("button", { class: "icon-btn", onclick: reloadClock }, "Refresh"),
         isToday ? null : h("button", { class: "icon-btn", onclick: async () => { await loadClockDay(null); renderClock(); } }, "Today"))),
+    clockSwitch(),
     nav,
     d.roster_error ? h("p", { class: "form-error" }, `Roster unavailable (${d.roster_error}) — shifts can't be matched right now.`) : null,
     !d.roster_known && !d.roster_error ? h("p", { class: "hint" }, "No roster tab for this month, so punches aren't compared with shifts.") : null,

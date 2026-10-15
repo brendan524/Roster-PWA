@@ -138,6 +138,28 @@ docker compose exec roster-app python -m app.cli email-status                 # 
 
 Emails are queued in the database and retried for several hours if Gmail can't be reached.
 
+## Pay report
+
+Fortnightly (Mon–Sun; the period ending Sun 4 Oct 2026 is the anchor; pay day is the Wednesday after).
+Emailed to `PAY_REPORT_EMAIL` (or `ALERT_EMAIL`) at 6am the Monday after the fortnight ends, and viewable
+any time under **Clock → Pay report** (including the current fortnight so far). It lists, per person, the
+quantity for each Xero pay item — no dollar amounts — plus anything to check.
+
+- **Fitness** (casual/part-time): pays rostered time, docked for lateness/leaving early, never extra time
+  unless you approve it; each shift rounded to the nearest 15 min, minimum 1 h. Over 10 h/day or 38 h/week
+  → Overtime. Public holidays → Public Holiday Hours. First Aid Allowance = days worked; a day with more than
+  one shift = 1 Broken Shift + 1 Excess Fares.
+- **First Aid** (casual): Sessional Teaching = roster Teaching Hours (min 2 per course, max 5 per day);
+  Non-Teaching Duties = 0.5 h per course + travel time to client sites; Vehicle km for those trips;
+  First Aid + Laundry allowances = 1 per week worked. Out-of-hours courses are flagged.
+- **Contractors**: hours to check their invoices. **Offshore**: days worked, leave, problems.
+- Directors / auto-clocked staff are left out.
+
+Set the office address (`OFFICE_ADDRESS`) and, under Clock → Pay report → First Aid venues, mark each roster
+Location as a campus or a client site (with its address and one-way km/minutes, or let Google Maps look them up
+if `GOOGLE_MAPS_API_KEY` is set). The 800-hour teaching tracker starts from each trainer's starting hours
+("Set starting hours" in the same screen).
+
 ## The roster sheet
 
 - **One tab per month**, named `MM/YYYY` (e.g. `10/2026`) or `YYYY-MM` (e.g. `2026-10`). Pick one style and stick to it. Two tabs for the same month are flagged and neither is read. Other tabs (e.g. a `Template` tab) are ignored. Copy each new month from the template tab so the columns stay consistent.

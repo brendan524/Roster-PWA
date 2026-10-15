@@ -126,6 +126,23 @@ def tick(db: Session, service: RosterService, now: datetime | None = None) -> No
                          f"backup-missing:{today}")
         db.commit()
 
+    # Pay report: the Monday after each fortnight ends (within 2 days, so a late deploy doesn't send old ones).
+    if 0 <= s.pay_report_hour <= 23 and local.hour >= s.pay_report_hour:
+        from app import payreport
+        from app.api.pay import send
+
+        last_end = payreport.period_for(local.date())[0] - timedelta(days=1)
+        if local.date() - last_end <= timedelta(days=2) and state.get(db, "pay_report_sent") != last_end.isoformat():
+            try:
+                send(db, payreport.build(db, service, last_end, now))
+            except Exception as e:  # noqa: BLE001 — e.g. roster tab missing
+                db.rollback()
+                mailer.alert(db, "Pay report couldn't be made",
+                             f"The pay report for the fortnight ending {last_end:%a %-d %b} failed: {e}\n"
+                             "Open Clock → Pay report in the app to see it, once fixed.", f"pay:{last_end}")
+            state.put(db, "pay_report_sent", last_end.isoformat())
+            db.commit()
+
     mailer.send_pending(db, now)
 
 
