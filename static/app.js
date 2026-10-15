@@ -120,9 +120,9 @@ function renderLogin(message) {
     h("label", { for: "email" }, "Staff ID or email"), email,
     h("label", { for: "password" }, "Password"), pw,
     err, btn,
-    h("p", { class: "hint" }, "Forgotten your password? Ask Brendan or Dylan to reset it."),
+    h("p", { class: "hint" }, "Forgotten your password? Ask Brendan, Aaron or Dylan to reset it."),
   );
-  render(form);
+  render(h("div", { class: "hero" }, h("img", { src: "/logo.png", alt: "The AB Group" })), form);
   email.focus();
 }
 
@@ -160,6 +160,7 @@ function renderChangePassword() {
 // ---------- chrome ----------
 
 function setChrome(loggedIn) {
+  document.body.classList.toggle("auth-screen", !loggedIn);
   document.getElementById("userbox").hidden = !loggedIn;
   document.getElementById("username").textContent = loggedIn && state.me ? state.me.name : "";
   const showTabs = loggedIn && state.me && state.me.role === "admin" && !state.me.must_change_password;

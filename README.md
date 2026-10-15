@@ -115,6 +115,6 @@ export PIN_PEPPER=dev COOKIE_SECURE=false ROSTER_SOURCE=csv ROSTER_CSV_DIR=./sam
 ```
 `ROSTER_SOURCE=csv` reads `sample-roster/YYYY-MM.csv` files instead of Google, so you can try the app without any Google credentials.
 
-## Placeholders to replace
+## Branding
 
-- `static/icons/*`: a generated "AB" mark. Send the real AB logo and these will be regenerated.
+`static/logo.png` (header and login screen) and `static/icons/*` (home-screen icon, favicon) are generated from the AB Group logo SVG, always on black. The supplied SVG wraps a ~435 px image, so if a true vector version turns up, regenerate these from it at higher resolution. After changing any of them, bump `VERSION` in `static/sw.js` so installed apps pick up the new files.

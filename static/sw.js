@@ -5,12 +5,12 @@
      marked with x-ab-offline so the app can say so. Cleared on logout.
    - Everything else under /api (logins, admin data) is never cached. */
 
-const VERSION = "v1";
+const VERSION = "v2";
 const SHELL = `ab-shell-${VERSION}`;
 const DATA = "ab-data"; // personal roster cache; wiped on logout
 const SHELL_FILES = ["/", "/app.css", "/app.js", "/manifest.webmanifest",
   "/fonts/lato-400.woff2", "/fonts/lato-700.woff2", "/fonts/lato-900.woff2",
-  "/icons/icon-192.png", "/icons/favicon-32.png"];
+  "/icons/icon-192.png", "/icons/favicon-32.png", "/logo.png"];
 const OFFLINE_API = ["/api/auth/me", "/api/roster/me"];
 
 self.addEventListener("install", (e) => {

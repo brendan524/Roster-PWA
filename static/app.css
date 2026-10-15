@@ -43,16 +43,12 @@ button, input, select { font: inherit; color: inherit; }
   background: var(--black); color: var(--white);
 }
 .brand { display: flex; align-items: center; gap: 10px; }
-.logo {
-  position: relative; display: inline-flex; align-items: center; justify-content: center;
-  font-weight: 900; font-size: 18px; letter-spacing: .5px; line-height: 1;
-  padding-bottom: 6px;
-}
-.logo i {
-  position: absolute; left: 0; right: 0; bottom: 0; height: 3px;
-  background: linear-gradient(90deg, var(--blue) 50%, var(--green) 50%);
-}
-.brand-name { font-weight: 700; font-size: 17px; }
+.logo-img { display: block; height: 40px; width: auto; }
+/* Login: big logo on a black band under the bar; hide the small one so it isn't doubled */
+.auth-screen .brand { visibility: hidden; }
+.hero { background: var(--black); margin: -16px -16px 0; padding: 4px 16px 28px; text-align: center; }
+.hero img { height: 150px; width: auto; }
+.auth-screen .auth { margin-top: 20px; }
 .topbar-right { display: flex; align-items: center; gap: 12px; font-size: 14px; }
 .topbar-right #username { opacity: .85; max-width: 40vw; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .link-btn { background: none; border: 0; padding: 6px 0; color: var(--blue); font-weight: 700; cursor: pointer; }
