@@ -64,6 +64,7 @@ A month tab with no rows (or no rows for someone) shows **"No shifts scheduled y
    cp .env.example .env && nano .env                          # values from Passbolt
    mkdir -p secrets && nano secrets/google-service-account.json  # paste the key
    chmod 600 .env secrets/*
+   chown 1000:1000 secrets/google-service-account.json  # the app runs as user 1000 in its container
    docker compose up -d --build
    docker compose logs -f roster-app                          # wait for "Application startup complete"
    ```
