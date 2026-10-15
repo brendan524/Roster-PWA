@@ -6,7 +6,8 @@ os.environ.setdefault("DATABASE_URL", os.environ.get(
 os.environ["PIN_PEPPER"] = "test-pepper"
 os.environ["COOKIE_SECURE"] = "false"
 os.environ["ROSTER_SOURCE"] = "csv"
-os.environ["AUTO_CLOCK_MINUTES"] = "0"  # tests run the job directly
+os.environ["AUTO_CLOCK_MINUTES"] = "0"  # tests run the jobs directly
+os.environ["JOBS_ENABLED"] = "false"
 
 import pytest  # noqa: E402
 from fastapi.testclient import TestClient  # noqa: E402
@@ -36,7 +37,7 @@ def migrated_db():
 @pytest.fixture(autouse=True)
 def clean_db(migrated_db):
     with engine.begin() as conn:
-        conn.execute(text("TRUNCATE auth_sessions, staff, xero_connection CASCADE"))
+        conn.execute(text("TRUNCATE auth_sessions, staff, xero_connection, email_outbox, app_state CASCADE"))
     yield
 
 

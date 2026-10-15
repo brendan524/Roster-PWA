@@ -17,6 +17,15 @@ mkdir -p "$BACKUP_DIR"
 chmod 700 "$BACKUP_DIR"
 cd "$APP_DIR"
 
+# Email Brendan (ALERT_EMAIL) if anything below fails. Best effort: if the app
+# itself is down the email can't go, but the app also alerts when no backup
+# has arrived for 36 hours.
+alert() {
+  docker compose exec -T roster-app python -m app.cli alert "$1" "$2 (server: $(hostname), $(date '+%F %T'))" \
+    >/dev/null 2>&1 || echo "$(date '+%F %T') (couldn't send the alert email)" >&2
+}
+trap 'alert "Backup FAILED" "The nightly database backup failed at line $LINENO of deploy/backup.sh. See /root/backups/ab-roster/backup.log"' ERR
+
 file="$BACKUP_DIR/roster-$(date +%Y-%m-%d-%H%M).sql.gz"
 docker compose exec -T roster-db pg_dump -U roster --clean --if-exists roster | gzip > "$file.tmp"
 
@@ -24,6 +33,7 @@ docker compose exec -T roster-db pg_dump -U roster --clean --if-exists roster | 
 if ! gunzip -c "$file.tmp" | grep -q "CREATE TABLE public.staff"; then
   echo "$(date '+%F %T') BACKUP FAILED: dump looks empty or incomplete" >&2
   rm -f "$file.tmp"
+  alert "Backup FAILED" "The nightly database dump looked empty or incomplete, so it wasn't kept."
   exit 1
 fi
 
@@ -42,6 +52,7 @@ if [ -s "$PASSFILE" ] && grep -q '^BACKUP_DRIVE_FOLDER_ID=..*' "$APP_DIR/.env" 2
     echo "$(date '+%F %T') offsite copy OK"
   else
     echo "$(date '+%F %T') OFFSITE FAILED — local backup is still in $BACKUP_DIR" >&2
+    alert "Off-server backup copy FAILED" "Tonight's backup was saved on the server, but copying it to Google Drive failed. See /root/backups/ab-roster/backup.log"
     exit 2
   fi
 else

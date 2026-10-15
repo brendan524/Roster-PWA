@@ -26,6 +26,13 @@ services:
       XERO_CLIENT_ID: ${XERO_CLIENT_ID:-}
       XERO_CLIENT_SECRET: ${XERO_CLIENT_SECRET:-}
       XERO_REDIRECT_URI: https://${APP_DOMAIN}/api/admin/xero/callback
+      APP_URL: https://${APP_DOMAIN}
+      SMTP_HOST: ${SMTP_HOST:-smtp.gmail.com}
+      SMTP_PORT: ${SMTP_PORT:-587}
+      SMTP_USER: ${SMTP_USER:-}
+      SMTP_PASSWORD: ${SMTP_PASSWORD:-}
+      MAIL_FROM: ${MAIL_FROM:-}
+      ALERT_EMAIL: ${ALERT_EMAIL:-}
       TIMEZONE: ${TIMEZONE:-Australia/Melbourne}
       ROSTER_SOURCE: google
       ROSTER_SHEET_ID: ${ROSTER_SHEET_ID:?set ROSTER_SHEET_ID in .env}

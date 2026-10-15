@@ -105,6 +105,19 @@ def prune(http, folder: str, keep_days: int, now: datetime | None = None) -> lis
     return removed
 
 
+def _record_success(name: str) -> None:
+    """Note the time, so the app can email an alert if backups stop arriving (e.g. the nightly job stopped)."""
+    try:
+        from app import state
+        from app.db import SessionLocal
+
+        with SessionLocal() as db:
+            state.put(db, "last_offsite_backup", datetime.now(UTC).isoformat())
+            db.commit()
+    except Exception as e:  # noqa: BLE001 — the upload itself worked
+        print(f"note: couldn't record the backup time ({type(e).__name__})", file=sys.stderr)
+
+
 def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="python -m app.offsite")
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -128,6 +141,7 @@ def main(argv: list[str] | None = None) -> int:
         info = upload(http, folder, a.name, data)
         removed = prune(http, folder, get_settings().backup_drive_keep_days)
         print(f"offsite OK: {info['name']} ({len(data):,} bytes)" + (f"; removed {len(removed)} old" if removed else ""))
+        _record_success(info["name"])
         return 0
     except OffsiteError as e:
         print(f"OFFSITE FAILED: {e}", file=sys.stderr)

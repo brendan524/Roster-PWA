@@ -1,12 +1,13 @@
+import re
 from datetime import timedelta
 
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
-from app.deps import COOKIE_NAME, current_staff
+from app.deps import COOKIE_NAME, current_staff, ready_staff
 from app.models import Staff
 from app.security import (
     create_session,
@@ -41,6 +42,7 @@ def me_payload(staff: Staff) -> dict:
         "department": staff.department,
         "must_change_password": staff.must_change_password,
         "has_leave": staff.has_leave,
+        "email": staff.email,
     }
 
 
@@ -124,4 +126,25 @@ def change_password(
     db.commit()
     # Sign out every other device that had the old password.
     delete_all_sessions(db, staff.staff_id, except_token=request.cookies.get(COOKIE_NAME))
+    return me_payload(staff)
+
+
+class EmailIn(BaseModel):
+    email: str = Field("", max_length=254)
+    password: str = Field(max_length=200)
+
+
+@router.post("/email")
+def set_email(body: EmailIn, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db)):
+    """Staff set their own email (for notifications; it also works as their login).
+    Needs their password, since it changes how they can log in."""
+    if not verify_password(staff.password_hash, body.password):
+        raise HTTPException(400, "Password is incorrect.")
+    email = body.email.strip().lower() or None
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(400, "That email address doesn't look right.")
+    if email and db.query(Staff).filter(Staff.email == email, Staff.staff_id != staff.staff_id).first():
+        raise HTTPException(409, "That email is already used by someone else. Ask Brendan if it's yours.")
+    staff.email = email
+    db.commit()
     return me_payload(staff)

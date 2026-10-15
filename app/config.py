@@ -52,6 +52,17 @@ class Settings(BaseSettings):
     xero_sync_hours: float = 6
     auto_clock_minutes: float = 5  # how often auto-clock staff get their rostered punches (0 = off)
 
+    # Email (Google Workspace: smtp.gmail.com, a mailbox like hr@abgroup.au and its app password)
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_user: str = ""
+    smtp_password: str = ""
+    mail_from: str = ""  # defaults to smtp_user
+    alert_email: str = ""  # system alerts (backups, Xero, roster sheet)
+    app_url: str = ""  # e.g. https://hr.abgroup.au, for links in emails
+    digest_hour: int = 7  # daily admin digest, local time; -1 = off
+    jobs_enabled: bool = True  # background email/alert jobs (off in tests)
+
     # Roster source
     roster_source: Literal["google", "csv"] = "google"
     roster_sheet_id: str = ""

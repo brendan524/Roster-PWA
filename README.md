@@ -102,6 +102,41 @@ The app only **reads** from Xero: payroll employees and their leave balances. It
 
 The access tokens are stored encrypted, using a key derived from `PIN_PEPPER`. The connection renews itself whenever it syncs. If it ever expires (for example, it was disconnected in Xero), the Leave tab shows **Reconnect**.
 
+## Availability
+
+On **My shifts**, everyone (contractors too) can set when they *can't* work: a regular week (e.g. never
+Mondays, or not 6–10am Wednesdays) and specific dates (all day or between two times). Offshore staff enter
+Philippines time; everyone else Melbourne time. Nobody approves it. Admins see it under **Team → Availability**,
+with a list of rostered shifts in the next 14 days that clash with someone's availability or leave.
+
+## Emails
+
+The app sends email through a Google Workspace mailbox (e.g. `hr@abgroup.au`):
+
+- staff: leave approved / declined (if they've added their email — tap your name at the top);
+- admins: each new leave request, and a daily check at 7am (roster clashes, yesterday's missed clock-ins/outs,
+  roster sheet errors) — only sent when there's something in it;
+- `ALERT_EMAIL`: backup or off-site copy failed, no backup for 36 hours, Xero needs reconnecting,
+  roster sheet unreadable for 30 minutes.
+
+Set up (once): on the sending mailbox turn on 2-Step Verification, create an app password at
+https://myaccount.google.com/apppasswords, then add to `.env` and restart:
+
+```
+SMTP_USER=hr@abgroup.au
+SMTP_PASSWORD=the-16-letter-app-password
+ALERT_EMAIL=brendan@...
+```
+
+```bash
+docker compose up -d
+docker compose exec roster-app python -m app.cli test-email you@example.com
+docker compose exec roster-app python -m app.cli set-email AB0002 aaron@...   # or staff add their own in the app
+docker compose exec roster-app python -m app.cli email-status                 # recent emails and whether they went
+```
+
+Emails are queued in the database and retried for several hours if Gmail can't be reached.
+
 ## The roster sheet
 
 - **One tab per month**, named `MM/YYYY` (e.g. `10/2026`) or `YYYY-MM` (e.g. `2026-10`). Pick one style and stick to it. Two tabs for the same month are flagged and neither is read. Other tabs (e.g. a `Template` tab) are ignored. Copy each new month from the template tab so the columns stay consistent.

@@ -220,16 +220,9 @@ def _session_out(sess: WorkSession, names: dict[str, str], kiosks: dict[int, str
     }
 
 
-@router.get("/admin/clock")
-def admin_day(
-    day: date | None = None,
-    _: Staff = Depends(admin_staff),
-    db: Session = Depends(get_db),
-    service: RosterService = Depends(get_roster_service),
-):
+def day_report(db: Session, service: RosterService, day: date, now: datetime):
+    """Clock sessions for one local day, matched to the roster with flags, plus rostered no-shows."""
     tz = ZoneInfo(get_settings().timezone)
-    now = utcnow()
-    day = day or now.astimezone(tz).date()
     day_start, day_end = local_day_bounds(day, tz)
 
     # Punches near the day (so overnight shifts pair up), grouped per person.
@@ -250,6 +243,20 @@ def admin_day(
 
     no_shows = analyse(sessions, shifts, tz, now, roster_known=roster_known)
     todays = sorted((s for s in sessions if day_start <= s.anchor < day_end), key=lambda s: s.anchor)
+    return todays, [s for s in no_shows if s.date == day], roster_known, roster_error
+
+
+@router.get("/admin/clock")
+def admin_day(
+    day: date | None = None,
+    _: Staff = Depends(admin_staff),
+    db: Session = Depends(get_db),
+    service: RosterService = Depends(get_roster_service),
+):
+    tz = ZoneInfo(get_settings().timezone)
+    now = utcnow()
+    day = day or now.astimezone(tz).date()
+    todays, no_shows, roster_known, roster_error = day_report(db, service, day, now)
 
     staff_rows = db.query(Staff).all()
     names = {s.staff_id: s.name for s in staff_rows}
@@ -272,7 +279,7 @@ def admin_day(
         "on_clock": on_clock,
         "sessions": [_session_out(s, names, kiosks) for s in todays],
         "no_shows": [s.to_dict() | {"name": names.get(s.staff_id, s.staff_name or s.staff_id)}
-                     for s in no_shows if s.date == day],
+                     for s in no_shows],
         "staff": [{"staff_id": s.staff_id, "name": s.name} for s in sorted(staff_rows, key=lambda s: s.name)
                   if s.active],
     }

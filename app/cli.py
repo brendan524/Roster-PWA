@@ -126,7 +126,8 @@ def seed_staff(path: str) -> int:
                               has_leave=default_has_leave(v["location_type"], v["employment_status"]))
                 db.add(staff)
             staff.name = v["name"]
-            staff.email = v["email"] or None
+            if v["email"]:  # a blank cell keeps the email they set in the app
+                staff.email = v["email"]
             staff.department = v["department"]
             staff.location_type = v["location_type"]
             staff.join_date = join
@@ -284,6 +285,63 @@ def set_leave(staff_id: str, on: bool) -> int:
     return 0
 
 
+def set_email(staff_id: str, email: str) -> int:
+    email = email.strip().lower()
+    if email in ("", "-", "none"):
+        email = ""
+    elif not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        sys.exit("That email address doesn't look right.")
+    with SessionLocal() as db:
+        staff = _get(db, staff_id)
+        other = db.query(Staff).filter(Staff.email == email, Staff.staff_id != staff.staff_id).first() if email else None
+        if other:
+            sys.exit(f"{email} is already used by {other.name} ({other.staff_id}).")
+        staff.email = email or None
+        db.commit()
+        print(f"{staff.name} ({staff.staff_id}): email {'set to ' + email if email else 'removed'}.")
+    return 0
+
+
+def send_alert(subject: str, body: str) -> int:
+    """Used by the backup script. Sends straight away (doesn't need the database)."""
+    from app import mailer
+    from app.config import get_settings
+
+    to = get_settings().alert_email
+    if not to or not mailer.configured():
+        print("Email alerts aren't set up (SMTP_USER / SMTP_PASSWORD / ALERT_EMAIL).", file=sys.stderr)
+        return 1
+    mailer.send_direct(to, f"[AB app] {subject}", body)
+    print(f"Alert sent to {to}.")
+    return 0
+
+
+def test_email(to: str) -> int:
+    from app import mailer
+
+    if not mailer.configured():
+        sys.exit("Email isn't set up yet: add SMTP_USER and SMTP_PASSWORD to .env, then docker compose up -d.")
+    try:
+        mailer.send_direct(to, "Test email from the AB staff app", "If you can read this, email is working.")
+    except Exception as e:  # noqa: BLE001
+        sys.exit(f"Sending failed: {type(e).__name__}: {e}")
+    print(f"Sent a test email to {to}. Check the inbox (and spam).")
+    return 0
+
+
+def email_status() -> int:
+    from app.models import EmailOutbox
+
+    with SessionLocal() as db:
+        rows = db.query(EmailOutbox).order_by(EmailOutbox.id.desc()).limit(15).all()
+        if not rows:
+            print("No emails yet.")
+        for m in rows:
+            st = "sent" if m.sent_at else (f"FAILED x{m.attempts}: {m.last_error[:80]}" if m.attempts else "waiting")
+            print(f"{m.created_at:%d %b %H:%M}  {m.to_addr:<28} {m.subject[:50]:<50}  {st}")
+    return 0
+
+
 def set_auto_clock(staff_id: str, on: bool) -> int:
     with SessionLocal() as db:
         staff = _get(db, staff_id)
@@ -380,6 +438,14 @@ def main(argv: list[str] | None = None) -> int:
     sl = sub.add_parser("set-leave", help="'no' for contractors (no leave, Leave tab hidden), 'yes' to undo")
     sl.add_argument("staff_id")
     sl.add_argument("value", choices=["yes", "no"])
+    se = sub.add_parser("set-email", help="email for notifications (also works as their login); 'none' removes it")
+    se.add_argument("staff_id")
+    se.add_argument("email")
+    al = sub.add_parser("alert", help="email a system alert to ALERT_EMAIL (used by the backup script)")
+    al.add_argument("subject")
+    al.add_argument("body")
+    sub.add_parser("test-email", help="send a test email").add_argument("to")
+    sub.add_parser("email-status", help="the most recent emails and whether they were sent")
     ac = sub.add_parser("set-auto-clock", help="'yes' = clock in/out automatically at rostered start/end times")
     ac.add_argument("staff_id")
     ac.add_argument("value", choices=["yes", "no"])
@@ -405,6 +471,14 @@ def main(argv: list[str] | None = None) -> int:
         return reset_password(a.staff_id, a.choose)
     if a.cmd == "set-pin":
         return set_pin(a.staff_id, a.choose)
+    if a.cmd == "set-email":
+        return set_email(a.staff_id, a.email)
+    if a.cmd == "alert":
+        return send_alert(a.subject, a.body)
+    if a.cmd == "test-email":
+        return test_email(a.to)
+    if a.cmd == "email-status":
+        return email_status()
     if a.cmd == "set-auto-clock":
         return set_auto_clock(a.staff_id, a.value == "yes")
     if a.cmd == "set-leave":

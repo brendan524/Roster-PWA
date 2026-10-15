@@ -9,6 +9,7 @@ from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app import mailer
 from app.config import get_settings
 from app.db import get_db
 from app.deps import admin_staff, ready_staff
@@ -114,6 +115,14 @@ def _xero_note(db: Session, staff: Staff, leave_type: str) -> str:
     return f"Xero balance: {float(match.units):g} {match.unit_type.lower()} of {match.leave_name} (as of {match.fetched_at:%d %b})"
 
 
+def _dates_text(r: LeaveRequest) -> str:
+    def one(d: date, half: bool) -> str:
+        return d.strftime("%a %-d %b %Y") + (" (half day)" if half else "")
+    if r.start_date == r.end_date:
+        return one(r.start_date, r.start_half or r.end_half)
+    return f"{one(r.start_date, r.start_half)} to {one(r.end_date, r.end_half)}"
+
+
 @router.get("/leave/me")
 def my_leave(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db)):
     requests = (db.query(LeaveRequest).filter_by(staff_id=staff.staff_id)
@@ -181,6 +190,13 @@ def apply_for_leave(body: LeaveIn, staff: Staff = Depends(ready_staff), db: Sess
                        end_date=body.end_date, start_half=body.start_half, end_half=body.end_half,
                        days=days, reason=body.reason.strip(), status="pending")
     db.add(req)
+    db.flush()
+    mailer.queue_admins(
+        db, f"Leave request: {staff.name} — {lt.label.lower()}, {_dates_text(req)}",
+        f"{staff.name} ({staff.staff_id}) has asked for {lt.label.lower()}:\n\n"
+        f"  {_dates_text(req)} ({float(days):g} working day{'s' if days != 1 else ''})\n"
+        f"  Reason: {req.reason}\n\nApprove or decline it on the Leave tab in the staff app.",
+        exclude=staff.staff_id)
     db.commit()
     return _request_out(req, staff)
 
@@ -261,8 +277,15 @@ def decide(request_id: int, body: DecisionIn, admin: Staff = Depends(admin_staff
     req.decided_by = admin.staff_id
     req.decided_at = datetime.now(UTC)
     req.decision_note = body.note.strip()
+    staff = db.get(Staff, req.staff_id)
+    word = "approved" if req.status == "approved" else "declined"
+    mailer.queue(db, staff.email, f"Your leave request was {word}",
+                 f"Hi {staff.name.split()[0]},\n\n{admin.name} {word} your {label_for(staff, req.leave_type).lower()} for "
+                 f"{_dates_text(req)}."
+                 + (f"\n\nNote: {req.decision_note}" if req.decision_note else "")
+                 + "\n\nYou can see your requests on the Leave tab in the staff app.")
     db.commit()
-    return _request_out(req, db.get(Staff, req.staff_id))
+    return _request_out(req, staff)
 
 
 # ---- attachments --------------------------------------------------------------------

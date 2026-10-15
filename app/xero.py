@@ -27,6 +27,7 @@ import requests
 from cryptography.fernet import Fernet, InvalidToken
 from sqlalchemy.orm import Session
 
+from app import mailer
 from app.config import get_settings
 from app.models import Staff, XeroConnection, XeroEmployeeLink, XeroLeaveBalance
 
@@ -147,6 +148,9 @@ def _access_token(db: Session, http, force_refresh: bool = False) -> tuple[str, 
     except XeroError as e:
         msg = "The Xero connection has expired or was removed. An admin needs to reconnect Xero (Leave tab)."
         conn.last_error = f"{msg} ({e})"[:1000]
+        mailer.alert(db, "Xero needs reconnecting",
+                     f"{msg}\n\nUntil then, onshore staff see the leave balances from the last successful sync.",
+                     f"xero:{datetime.now(UTC):%Y-%m-%d}")
         db.commit()
         raise XeroError(msg) from e
     conn.access_token_enc = _enc(tokens["access_token"])

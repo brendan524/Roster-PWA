@@ -28,6 +28,12 @@ const state = {
   leaveFormOpen: false,
   leaveMsg: null,
   xero: null,         // /api/admin/xero/status (admins)
+  avail: null,        // /api/availability/me
+  availEditWeek: false,
+  availDateOpen: false,
+  availMsg: null,
+  teamView: "roster", // roster | availability (admin Team tab)
+  adminAvail: null,   // /api/admin/availability
 };
 
 const app = document.getElementById("app");
@@ -139,7 +145,7 @@ function renderLogin(message) {
   email.focus();
 }
 
-function renderChangePassword() {
+function renderChangePassword(voluntary = false) {
   setChrome(true);
   const err = h("p", { class: "form-error", hidden: true, role: "alert" });
   const cur = h("input", { type: "password", id: "cur", autocomplete: "current-password", required: true });
@@ -154,20 +160,56 @@ function renderChangePassword() {
       btn.disabled = true;
       try {
         state.me = await api("/api/auth/change-password", { method: "POST", body: { current_password: cur.value, new_password: nw.value } });
+        if (voluntary) { state.accountMsg = "Password changed. Other phones you were logged in on have been logged out."; return renderAccount(); }
         await start();
       } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     },
   },
-    h("h1", {}, "Set your password"),
-    h("p", { class: "sub" }, "Choose a new password to replace the temporary one you were given."),
-    h("label", { for: "cur" }, "Temporary password"), cur,
+    h("h1", {}, voluntary ? "Change password" : "Set your password"),
+    h("p", { class: "sub" }, voluntary ? "Choose a new password." : "Choose a new password to replace the temporary one you were given."),
+    h("label", { for: "cur" }, voluntary ? "Current password" : "Temporary password"), cur,
     h("label", { for: "new" }, "New password"), nw,
     h("p", { class: "hint" }, "At least 10 characters."),
     h("label", { for: "again" }, "New password again"), again,
     err, btn,
+    voluntary ? h("button", { class: "link-btn dark", type: "button", onclick: () => renderAccount() }, "Cancel") : null,
   );
   render(form);
   cur.focus();
+}
+
+function renderAccount() {
+  state.tab = "account";
+  renderTabbar();
+  banner.hidden = true;
+  const me = state.me;
+  const err = h("p", { class: "form-error", hidden: true, role: "alert" });
+  const email = h("input", { type: "email", id: "acc-email", value: me.email || "", autocomplete: "email",
+    autocapitalize: "none", spellcheck: "false", placeholder: "you@example.com" });
+  const pw = h("input", { type: "password", id: "acc-pw", autocomplete: "current-password" });
+  const save = h("button", { class: "btn", type: "submit" }, "Save email");
+  render(
+    h("button", { class: "link-btn dark", onclick: () => { state.tab = "mine"; route(); } }, "‹ Back to my shifts"),
+    h("div", { class: "page-head" }, h("h1", {}, "My details")),
+    state.accountMsg ? h("p", { class: "clock-msg ok", role: "status" }, state.accountMsg) : null,
+    h("form", { class: "card account", onsubmit: async (e) => {
+      e.preventDefault(); err.hidden = true; save.disabled = true;
+      try {
+        state.me = await api("/api/auth/email", { method: "POST", body: { email: email.value, password: pw.value } });
+        state.accountMsg = state.me.email ? `Saved. Emails will go to ${state.me.email}.` : "Email removed.";
+        renderAccount();
+      } catch (ex) { err.textContent = ex.message; err.hidden = false; save.disabled = false; }
+    } },
+      h("div", {}, h("b", {}, me.name), h("span", { class: "meta" }, ` · ${me.staff_id}`)),
+      h("label", { for: "acc-email" }, "Email"), email,
+      h("p", { class: "hint" }, "We'll email you when your leave is approved or declined. You can also log in with it."),
+      h("label", { for: "acc-pw" }, "Your password (to confirm)"), pw,
+      err, save,
+    ),
+    h("div", { class: "card account", style: "margin-top:14px" },
+      h("b", {}, "Password"),
+      h("button", { class: "btn secondary", style: "margin-top:10px", onclick: () => { state.accountMsg = null; renderChangePassword(true); } }, "Change password")),
+  );
 }
 
 // ---------- chrome ----------
@@ -232,12 +274,14 @@ function pageHead(title, data, onRefresh) {
 // ---------- my roster ----------
 
 async function loadMine(refresh = false) {
-  const [roster, clock] = await Promise.all([
+  const [roster, clock, avail] = await Promise.all([
     api("/api/roster/me" + (refresh ? "?refresh=true" : "")),
     api("/api/clock/me").catch(() => state.clock),
+    api("/api/availability/me").catch(() => state.avail),
   ]);
   state.roster = roster;
   state.clock = clock;
+  state.avail = avail;
   await refreshPending();
 }
 
@@ -393,7 +437,124 @@ function renderMine() {
     seg,
     state.view === "list" ? nextCard : null,
     body,
+    availabilitySection(),
   );
+}
+
+// ---------- availability ----------
+
+const WEEKDAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday", "Sunday"];
+
+function fmtWindow(start, end) { return start ? `${fmtTime(start)} – ${fmtTime(end)}` : "all day"; }
+
+function fmtDateRange(a, b) { return a === b ? fmtDay(a) : `${fmtDay(a)} – ${fmtDay(b)}`; }
+
+function weekSummary(weekly) {
+  const off = weekly.filter((d) => d.mode !== "available");
+  if (!off.length) return "Available every day";
+  return off.map((d) => `${d.day.slice(0, 3)} ${d.mode === "all_day" ? "all day" : fmtWindow(d.start, d.end)}`).join(" · ");
+}
+
+function availabilitySection() {
+  const A = state.avail;
+  if (!A) return null;
+  const rerender = () => renderMine();
+  const reload = async () => { state.avail = await api("/api/availability/me"); rerender(); };
+  return h("section", { class: "avail" },
+    h("h2", { class: "month-title" }, "My availability"),
+    h("p", { class: "hint" }, `When you can't work, so the roster can be planned around it. Times are ${A.tz_label}.`),
+    A.clashes.length ? h("div", { class: "clash" },
+      h("b", {}, "You're rostered at times you said you can't work:"),
+      h("ul", { class: "clash-ul" }, A.clashes.slice(0, state.availAllClashes ? 99 : 4).map((c) =>
+        h("li", {}, `${fmtDay(c.date)} ${fmtTime(c.start)} – ${fmtTime(c.end)}`))),
+      A.clashes.length > 4 && !state.availAllClashes
+        ? h("button", { class: "link-btn dark small", onclick: () => { state.availAllClashes = true; renderMine(); } }, `Show all ${A.clashes.length}`) : null,
+      h("div", {}, "Please talk to Brendan or Aaron about these.")) : null,
+    state.availMsg ? h("p", { class: "clock-msg ok", role: "status" }, state.availMsg) : null,
+    h("div", { class: "card avail-card" },
+      h("div", { class: "row1" }, h("b", {}, "Every week"),
+        state.availEditWeek ? null : h("button", { class: "link-btn dark", onclick: () => { state.availEditWeek = true; state.availMsg = null; rerender(); } }, "Change")),
+      state.availEditWeek ? weekEditor(A, reload) : h("div", { class: "meta" }, weekSummary(A.weekly)),
+    ),
+    h("div", { class: "card avail-card" },
+      h("div", { class: "row1" }, h("b", {}, "Specific dates"),
+        state.availDateOpen ? null : h("button", { class: "link-btn dark", onclick: () => { state.availDateOpen = true; state.availMsg = null; rerender(); } }, "Add")),
+      state.availDateOpen ? dateEditor(A, reload) : null,
+      A.dates.length ? h("ul", { class: "avail-dates" }, A.dates.map((d) => h("li", {},
+        h("span", {}, h("b", {}, fmtDateRange(d.start_date, d.end_date)), ` · ${fmtWindow(d.start, d.end)}`,
+          d.note ? h("span", { class: "meta" }, ` — ${d.note}`) : null),
+        h("button", { class: "link-btn small", onclick: async () => {
+          if (!confirm("Remove this?")) return;
+          try { await api(`/api/availability/me/dates/${d.id}`, { method: "DELETE" }); state.availMsg = "Removed."; await reload(); }
+          catch (ex) { alert(ex.message); }
+        } }, "Remove"))))
+        : (state.availDateOpen ? null : h("div", { class: "meta" }, "None — add any days or times you can't work (e.g. holidays, appointments).")),
+    ),
+  );
+}
+
+function timeInput(value, label) { return h("input", { type: "time", value: value || "", "aria-label": label, step: "900" }); }
+
+function weekEditor(A, reload) {
+  const err = h("p", { class: "form-error", hidden: true, role: "alert" });
+  const rows = A.weekly.map((d) => {
+    const mode = h("select", { "aria-label": `${d.day} availability` },
+      h("option", { value: "available", selected: d.mode === "available" }, "Available"),
+      h("option", { value: "all_day", selected: d.mode === "all_day" }, "Can't work"),
+      h("option", { value: "window", selected: d.mode === "window" }, "Can't work between…"));
+    const from = timeInput(d.start, `${d.day} from`);
+    const to = timeInput(d.end, `${d.day} to`);
+    const times = h("div", { class: "avail-times", hidden: d.mode !== "window" }, from, h("span", {}, "to"), to);
+    mode.onchange = () => { times.hidden = mode.value !== "window"; };
+    return { d, mode, from, to, el: h("div", { class: "avail-day" }, h("span", { class: "avail-dname" }, d.day), mode, times) };
+  });
+  const save = h("button", { class: "btn", type: "submit" }, "Save my week");
+  return h("form", { class: "avail-form", onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true;
+    const days = rows.map((r) => ({ weekday: r.d.weekday, mode: r.mode.value,
+      start: r.mode.value === "window" ? r.from.value : null, end: r.mode.value === "window" ? r.to.value : null }));
+    const bad = rows.find((r) => r.mode.value === "window" && (!r.from.value || !r.to.value || r.from.value >= r.to.value));
+    if (bad) { err.textContent = `Check the times for ${bad.d.day}: the "to" time must be after the "from" time.`; err.hidden = false; return; }
+    save.disabled = true;
+    try {
+      await api("/api/availability/me/weekly", { method: "PUT", body: { days } });
+      state.availEditWeek = false; state.availMsg = "Saved."; await reload();
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; save.disabled = false; }
+  } },
+  rows.map((r) => r.el), err, save,
+  h("button", { class: "link-btn dark", type: "button", onclick: () => { state.availEditWeek = false; renderMine(); } }, "Cancel"));
+}
+
+function dateEditor(A, reload) {
+  const err = h("p", { class: "form-error", hidden: true, role: "alert" });
+  const from = h("input", { type: "date", id: "adf", min: A.today, value: A.today });
+  const to = h("input", { type: "date", id: "adt", min: A.today, value: A.today });
+  from.onchange = () => { to.min = from.value; if (to.value < from.value) to.value = from.value; };
+  const allDay = h("input", { type: "checkbox", id: "ada", checked: true });
+  const t1 = timeInput("", "From time"); const t2 = timeInput("", "To time");
+  const times = h("div", { class: "avail-times", hidden: true }, t1, h("span", {}, "to"), t2);
+  allDay.onchange = () => { times.hidden = allDay.checked; };
+  const note = h("input", { type: "text", id: "adn", maxlength: "300", placeholder: "Optional, e.g. holiday, uni exam" });
+  const save = h("button", { class: "btn", type: "submit" }, "Save");
+  return h("form", { class: "avail-form", onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true;
+    if (!from.value || !to.value) { err.textContent = "Choose the dates."; err.hidden = false; return; }
+    if (!allDay.checked && (!t1.value || !t2.value || t1.value >= t2.value)) {
+      err.textContent = "Give a from and to time (to after from), or tick All day."; err.hidden = false; return;
+    }
+    save.disabled = true;
+    try {
+      await api("/api/availability/me/dates", { method: "POST", body: { start_date: from.value, end_date: to.value,
+        start: allDay.checked ? null : t1.value, end: allDay.checked ? null : t2.value, note: note.value } });
+      state.availDateOpen = false; state.availMsg = "Saved."; await reload();
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; save.disabled = false; }
+  } },
+  h("div", { class: "grid2" }, h("div", {}, h("label", { for: "adf" }, "From"), from), h("div", {}, h("label", { for: "adt" }, "To"), to)),
+  h("label", { class: "check", for: "ada" }, allDay, " All day"),
+  times,
+  h("label", { for: "adn" }, "Note"), note,
+  err, save,
+  h("button", { class: "link-btn dark", type: "button", onclick: () => { state.availDateOpen = false; renderMine(); } }, "Cancel"));
 }
 
 function renderList(r, today) {
@@ -485,7 +646,48 @@ async function loadAdmin(refresh = false) {
   state.admin = await api("/api/admin/roster" + (refresh ? "?refresh=true" : ""));
 }
 
+function teamSwitch() {
+  return h("div", { class: "segmented", role: "group", "aria-label": "Show" },
+    [["roster", "Roster"], ["availability", "Availability"]].map(([v, label]) => h("button", {
+      "aria-pressed": state.teamView === v ? "true" : "false",
+      onclick: () => { state.teamView = v; renderTeam(); },
+    }, label)));
+}
+
+async function renderTeamAvailability(reload = false) {
+  if (!state.adminAvail || reload) {
+    render(teamSwitch(), h("p", { class: "loading" }, "Loading availability…"));
+    try { state.adminAvail = await api("/api/admin/availability"); }
+    catch (ex) { return render(teamSwitch(), emptyCard("Couldn't load availability", ex.message)); }
+  }
+  const A = state.adminAvail;
+  const people = A.staff.filter((s) => !state.teamStaff || s.staff_id === state.teamStaff);
+  render(
+    h("div", { class: "page-head" }, h("h1", {}, "Availability"),
+      h("div", { class: "updated" }, h("button", { class: "icon-btn", onclick: () => renderTeamAvailability(true) }, "Refresh"))),
+    teamSwitch(),
+    h("h2", { class: "month-title" }, `Roster clashes — next ${A.days} days`),
+    A.clashes.length ? h("div", { class: "clash-list" }, A.clashes.map((c) => h("div", { class: "clash" },
+      h("b", {}, `${fmtDay(c.date)} ${fmtTime(c.start)} – ${fmtTime(c.end)} · ${c.name}`),
+      h("div", {}, c.reason))))
+      : emptyCard("No clashes", "Nobody is rostered while unavailable or on leave."),
+    h("h2", { class: "month-title" }, "Everyone"),
+    h("select", { "aria-label": "Staff member", onchange: (e) => { state.teamStaff = e.target.value; renderTeamAvailability(); } },
+      h("option", { value: "" }, "Everyone"),
+      A.staff.map((s) => h("option", { value: s.staff_id, selected: s.staff_id === state.teamStaff }, `${s.name} (${s.staff_id})`))),
+    people.map((s) => h("article", { class: "leave-req" },
+      h("div", { class: "row1" }, h("b", {}, s.name), h("span", { class: "meta" }, s.tz_label)),
+      h("div", { class: "meta" }, weekSummary(s.weekly) === "Available every day" ? "No regular days off" : `Every week: ${weekSummary(s.weekly)}`),
+      s.dates.length ? h("ul", { class: "avail-dates" }, s.dates.map((d) => h("li", {},
+        h("span", {}, h("b", {}, fmtDateRange(d.start_date, d.end_date)), ` · ${fmtWindow(d.start, d.end)}`,
+          d.note ? h("span", { class: "meta" }, ` — ${d.note}`) : null,
+          d.new ? h("span", { class: "pill new" }, "New") : null)))) : null,
+    )),
+  );
+}
+
 function renderTeam() {
+  if (state.teamView === "availability") return renderTeamAvailability();
   const a = state.admin;
   setBanner(a);
   const staffSel = h("select", { "aria-label": "Staff member", onchange: (e) => { state.teamStaff = e.target.value; renderTeam(); } },
@@ -506,6 +708,7 @@ function renderTeam() {
 
   render(
     pageHead("Team roster", a, async () => { await loadAdmin(true); renderTabbar(); renderTeam(); }),
+    teamSwitch(),
     h("div", { class: "filters" }, staffSel, monthSel),
     h("div", { class: "summary" },
       h("span", { class: "ok" }, `${shifts.length} shift${shifts.length === 1 ? "" : "s"} · ${fmtHours(total)}`)),
@@ -832,6 +1035,8 @@ function renderLeave() {
       ...A.pending.map((r) => requestCard(r, { admin: true }))] : null,
     A ? h("h2", { class: "month-title" }, "My leave") : null,
     balanceBlock,
+    !state.me.email && L.has_leave !== false ? h("p", { class: "hint" }, "Want an email when your leave is approved? ",
+      h("button", { class: "link-btn dark small", onclick: () => { state.accountMsg = null; renderAccount(); } }, "Add your email")) : null,
     state.leaveMsg ? h("p", { class: "clock-msg ok", role: "status" }, state.leaveMsg) : null,
     L.has_leave === false ? null : state.leaveFormOpen ? leaveForm(L)
       : h("button", { class: "btn", onclick: () => { state.leaveFormOpen = true; state.leaveMsg = null; renderLeave(); } }, "Apply for leave"),
@@ -1009,6 +1214,8 @@ async function route() {
     } else if (state.tab === "leave") {
       if (!state.leave) { render(h("p", { class: "loading" }, "Loading leave…")); await loadLeave(); }
       renderLeave();
+    } else if (state.tab === "account") {
+      renderAccount();
     } else if (state.tab === "clock") {
       if (!state.clockData) { render(h("p", { class: "loading" }, "Loading clock-ins…")); await loadClockDay(state.clockDay); }
       renderClock();
@@ -1030,6 +1237,7 @@ async function start() {
   state.roster = null; state.admin = null; state.tab = "mine"; state.clockData = null; state.clockDay = null;
   state.clock = null; state.clockMsg = null;
   state.leave = null; state.leaveAdmin = null; state.leaveFormOpen = false; state.leaveMsg = null;
+  state.avail = null; state.adminAvail = null; state.availEditWeek = false; state.availDateOpen = false; state.availMsg = null;
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
   if (xeroReturn && state.me.role === "admin") {
@@ -1053,6 +1261,12 @@ async function boot() {
     renderLogin(ex.status === 0 ? ex.message : null);
   }
 }
+
+document.getElementById("username").addEventListener("click", () => {
+  if (!state.me || state.me.must_change_password) return;
+  state.accountMsg = null;
+  renderAccount();
+});
 
 document.getElementById("logout").addEventListener("click", async () => {
   await refreshPending();
