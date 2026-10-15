@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, String, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -120,4 +120,45 @@ class PunchVoid(Base):
     punch_id: Mapped[int] = mapped_column(ForeignKey("punches.id"), primary_key=True)
     voided_by: Mapped[str] = mapped_column(ForeignKey("staff.staff_id"))
     reason: Mapped[str] = mapped_column(String(300))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class LeaveRequest(Base):
+    """A leave application. Status moves pending → approved/declined, or pending → cancelled."""
+
+    __tablename__ = "leave_requests"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.staff_id"), index=True)
+    leave_type: Mapped[str] = mapped_column(String(20))
+    start_date: Mapped[date] = mapped_column(Date)
+    end_date: Mapped[date] = mapped_column(Date)
+    start_half: Mapped[bool] = mapped_column(Boolean, default=False)  # first day is a half day
+    end_half: Mapped[bool] = mapped_column(Boolean, default=False)  # last day is a half day
+    days: Mapped[float] = mapped_column(Numeric(5, 1))  # working days, counted when submitted
+    reason: Mapped[str] = mapped_column(String(500), default="")
+    status: Mapped[str] = mapped_column(String(10), default="pending")
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    decided_by: Mapped[str | None] = mapped_column(ForeignKey("staff.staff_id"))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_note: Mapped[str] = mapped_column(String(500), default="")
+
+
+class LeaveAdjustment(Base):
+    """Manual balance change by an admin (append-only), e.g. an opening balance at go-live.
+
+    kind "set": the balance becomes `amount` on `effective_date` (earlier history no longer counts).
+    kind "add": `amount` (+ or -) is added on `effective_date`.
+    """
+
+    __tablename__ = "leave_adjustments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.staff_id"), index=True)
+    leave_type: Mapped[str] = mapped_column(String(20))
+    kind: Mapped[str] = mapped_column(String(4))  # set | add
+    amount: Mapped[float] = mapped_column(Numeric(6, 2))
+    effective_date: Mapped[date] = mapped_column(Date)
+    reason: Mapped[str] = mapped_column(String(300))
+    created_by: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

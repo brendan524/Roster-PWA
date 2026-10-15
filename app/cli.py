@@ -19,7 +19,7 @@ import sys
 from pathlib import Path
 
 from app.db import SessionLocal
-from app.models import Kiosk, Staff
+from app.models import Kiosk, LeaveAdjustment, Staff
 from app.roster import CellError, parse_date
 from app.security import (
     delete_all_sessions,
@@ -259,6 +259,80 @@ def remove_kiosk(kiosk_id: int) -> int:
     return 0
 
 
+def set_join_date(staff_id: str, value: str) -> int:
+    try:
+        d = parse_date(value)
+    except CellError as e:
+        sys.exit(str(e))
+    with SessionLocal() as db:
+        staff = _get(db, staff_id)
+        staff.join_date = d
+        db.commit()
+        print(f"{staff.name} ({staff.staff_id}) join date set to {d:%d %b %Y}.")
+    return 0
+
+
+def leave_adjust(staff_id: str, leave_type: str, kind: str, amount: str, as_of: str | None, reason: str) -> int:
+    from datetime import date as _date
+    from decimal import Decimal, InvalidOperation
+
+    from app.leave import OFFSHORE_TYPES
+
+    codes = [t.code for t in OFFSHORE_TYPES if t.accrual is not None]
+    if leave_type not in codes:
+        sys.exit(f"Leave type must be one of: {', '.join(codes)}")
+    try:
+        amt = Decimal(amount)
+    except InvalidOperation:
+        sys.exit("Amount must be a number of days, e.g. 4.5")
+    if kind == "set" and amt < 0:
+        sys.exit("A balance can't be set below zero.")
+    if (amt * 2) % 1:
+        sys.exit("Use whole or half days (e.g. 2 or 2.5).")
+    if not reason.strip():
+        sys.exit("A reason is required.")
+    try:
+        effective = parse_date(as_of) if as_of else _date.today()
+    except CellError as e:
+        sys.exit(str(e))
+    with SessionLocal() as db:
+        staff = _get(db, staff_id)
+        if staff.location_type != "offshore":
+            sys.exit("The app only keeps balances for offshore staff (onshore balances are in Xero).")
+        db.add(LeaveAdjustment(staff_id=staff.staff_id, leave_type=leave_type, kind=kind, amount=amt,
+                               effective_date=effective, reason=reason.strip(), created_by="cli"))
+        db.commit()
+        what = f"set to {float(amt):g}" if kind == "set" else f"adjusted by {float(amt):+g}"
+        print(f"{staff.name}: {leave_type} {what} days as of {effective:%d %b %Y} ({reason.strip()}).")
+    return leave_balance(staff_id)
+
+
+def leave_balance(staff_id: str) -> int:
+    from app.leave import balances_for
+
+    with SessionLocal() as db:
+        staff = _get(db, staff_id)
+        from datetime import datetime
+        from zoneinfo import ZoneInfo
+
+        from app.config import get_settings
+        today = datetime.now(ZoneInfo(get_settings().timezone)).date()
+        bals = balances_for(db, staff, today)
+        if bals is None:
+            print(f"{staff.name}: no balance kept by the app "
+                  f"({'no join date set' if staff.location_type == 'offshore' else 'onshore — balance is in Xero'}).")
+            return 0
+        print(f"{staff.name} ({staff.staff_id}), joined {staff.join_date:%d %b %Y}")
+        for b in bals:
+            n = lambda x: f"{float(x):g}"  # noqa: E731
+            nxt = f", next +{n(b.next_amount)} on {b.next_date:%d %b %Y}" if b.next_date else ""
+            print(f"  {b.label}: {n(b.balance)} days (booked {n(b.booked)}, pending {n(b.pending)}, "
+                  f"available {n(b.available)}){nxt}")
+            for e in b.history[-6:]:
+                print(f"     {e.date:%d %b %Y}  {e.kind:<8} {float(e.amount):+g} → {n(e.balance)}  {e.note}")
+    return 0
+
+
 def list_staff() -> int:
     with SessionLocal() as db:
         for s in db.query(Staff).order_by(Staff.staff_id):
@@ -281,6 +355,18 @@ def main(argv: list[str] | None = None) -> int:
     sr.add_argument("staff_id")
     sr.add_argument("role", choices=["admin", "staff"])
     sub.add_parser("list-staff")
+    jd = sub.add_parser("set-join-date", help="needed before offshore leave can accrue")
+    jd.add_argument("staff_id")
+    jd.add_argument("date", help="YYYY-MM-DD or DD/MM/YYYY")
+    for name, helptext in (("leave-set", "set a leave balance as of a date (e.g. opening balance)"),
+                           ("leave-add", "add or subtract days (e.g. -1.5) as of a date")):
+        lp = sub.add_parser(name, help=helptext)
+        lp.add_argument("staff_id")
+        lp.add_argument("leave_type", choices=["vacation", "sick"])
+        lp.add_argument("days")
+        lp.add_argument("--as-of", help="date it applies from (default today)")
+        lp.add_argument("--reason", required=True)
+    sub.add_parser("leave-balance").add_argument("staff_id")
     sub.add_parser("list-kiosks")
     sub.add_parser("remove-kiosk", help="stop a kiosk device working (e.g. lost tablet)").add_argument("kiosk_id", type=int)
     a = p.parse_args(argv)
@@ -291,6 +377,12 @@ def main(argv: list[str] | None = None) -> int:
         return reset_password(a.staff_id, a.choose)
     if a.cmd == "set-pin":
         return set_pin(a.staff_id, a.choose)
+    if a.cmd == "set-join-date":
+        return set_join_date(a.staff_id, a.date)
+    if a.cmd in ("leave-set", "leave-add"):
+        return leave_adjust(a.staff_id, a.leave_type, a.cmd.split("-")[1], a.days, a.as_of, a.reason)
+    if a.cmd == "leave-balance":
+        return leave_balance(a.staff_id)
     if a.cmd == "list-kiosks":
         return list_kiosks()
     if a.cmd == "remove-kiosk":
