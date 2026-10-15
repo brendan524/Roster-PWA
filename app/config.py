@@ -45,6 +45,12 @@ class Settings(BaseSettings):
     backup_drive_folder_id: str = ""
     backup_drive_keep_days: int = 90
 
+    # Xero (onshore leave balances, read-only)
+    xero_client_id: str = ""
+    xero_client_secret: str = ""
+    xero_redirect_uri: str = ""  # e.g. https://hr.abgroup.au/api/admin/xero/callback
+    xero_sync_hours: float = 6
+
     # Roster source
     roster_source: Literal["google", "csv"] = "google"
     roster_sheet_id: str = ""

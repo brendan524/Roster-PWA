@@ -6,7 +6,7 @@ A self-hosted PWA for AB Group staff. It replaces Frappe HR.
 
 **Stage 2:** clock in/out with a PIN, on a personal phone (with GPS) or at an office kiosk. Works offline. Admins get a daily **Clock** view with late, early, missing and unrostered flags, plus corrections with an audit trail.
 
-**Stage 3a:** a **Leave** tab for everyone. Offshore balances build up automatically. Staff apply in the app; admins approve or decline from the same tab, which shows a badge when requests are waiting. (3b, reading onshore balances from Xero, is not built yet.)
+**Stage 3a:** a **Leave** tab for everyone. Offshore balances build up automatically. Staff apply in the app; admins approve or decline from the same tab, which shows a badge when requests are waiting. **Stage 3b:** onshore staff see their leave balances from **Xero Payroll**, read-only and synced every 6 hours.
 
 Later stages: availability (4) and the pay report (5).
 
@@ -79,7 +79,28 @@ docker compose exec roster-app python -m app.cli leave-balance AB0003     # chec
 ```
 Adjustments can't be edited or deleted. To correct one, add another.
 
-**Onshore** staff can apply, but their balances are kept in Xero. Showing them in the app is Stage 3b.
+**Onshore** staff can apply in the app. Their balances come from Xero (below). Xero stays the record, so update it when you approve leave.
+
+### Xero (onshore balances)
+
+The app only **reads** from Xero: payroll employees and their leave balances. It never writes to Xero.
+
+1. **Create the Xero app.** At **developer.xero.com → My Apps → New app**:
+   - Name: `AB Group Staff App`
+   - Integration type: **Web app**
+   - Company URL: `https://hr.abgroup.au`
+   - Redirect URI: `https://hr.abgroup.au/api/admin/xero/callback`
+
+   Then go to **Configuration**: copy the **Client id**, and use **Generate a secret** to get the secret. Save both in Passbolt.
+2. **Add them to the server.** Add these lines to `.env`, then run `docker compose up -d`:
+   ```
+   XERO_CLIENT_ID=…
+   XERO_CLIENT_SECRET=…
+   ```
+3. **Connect.** In the app, an admin goes to **Leave → Xero → Connect Xero**, signs in to Xero, chooses the AB organisation, and allows access.
+4. **Check the matches.** Staff are matched to Xero employees automatically, by exact name or email. Anyone not matched shows "Not linked": pick their Xero name from the dropdown. If two Xero employees have the same name, the app won't guess, so you pick.
+
+The access tokens are stored encrypted, using a key derived from `PIN_PEPPER`. The connection renews itself whenever it syncs. If it ever expires (for example, it was disconnected in Xero), the Leave tab shows **Reconnect**.
 
 ## The roster sheet
 

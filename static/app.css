@@ -279,3 +279,11 @@ label.check input { width: 20px; height: 20px; }
 .decide-btns { display: flex; gap: 10px; }
 .btn.approve { background: var(--green); }
 .btn.decline { background: #E9EDF0; color: var(--ink); }
+
+/* ---- xero ---- */
+.card.xero { margin-bottom: 14px; }
+.card.xero .row1 { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+.card.xero a.btn { text-align: center; text-decoration: none; }
+.xero-h { font-size: 14px; margin: 16px 0 6px; }
+.xero-row { display: grid; gap: 6px; padding: 10px 0; border-top: 1px solid var(--line); }
+.xero-row .meta { font-size: 13px; color: var(--muted); }

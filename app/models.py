@@ -162,3 +162,44 @@ class LeaveAdjustment(Base):
     reason: Mapped[str] = mapped_column(String(300))
     created_by: Mapped[str] = mapped_column(String(32))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class XeroConnection(Base):
+    """The single connection to AB Group's Xero organisation. Tokens are stored encrypted."""
+
+    __tablename__ = "xero_connection"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)  # always 1
+    tenant_id: Mapped[str] = mapped_column(String(64))
+    tenant_name: Mapped[str] = mapped_column(String(200), default="")
+    access_token_enc: Mapped[str] = mapped_column(String(8000))
+    refresh_token_enc: Mapped[str] = mapped_column(String(2000))
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    connected_by: Mapped[str] = mapped_column(String(32))
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    last_sync_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_error: Mapped[str] = mapped_column(String(1000), default="")
+
+
+class XeroEmployeeLink(Base):
+    """Which Xero payroll employee a staff member is."""
+
+    __tablename__ = "xero_employee_links"
+
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.staff_id", ondelete="CASCADE"), primary_key=True)
+    xero_employee_id: Mapped[str] = mapped_column(String(64), unique=True)
+    xero_name: Mapped[str] = mapped_column(String(200), default="")
+    linked_by: Mapped[str] = mapped_column(String(32))  # "auto" or an admin's staff id
+
+
+class XeroLeaveBalance(Base):
+    """Leave balance copied from Xero at the last sync (Xero stays the source of truth)."""
+
+    __tablename__ = "xero_leave_balances"
+
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.staff_id", ondelete="CASCADE"), primary_key=True)
+    leave_type_id: Mapped[str] = mapped_column(String(64), primary_key=True)
+    leave_name: Mapped[str] = mapped_column(String(200))
+    units: Mapped[float] = mapped_column(Numeric(10, 4))
+    unit_type: Mapped[str] = mapped_column(String(20), default="Hours")
+    fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))

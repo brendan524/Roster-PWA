@@ -12,7 +12,7 @@ from app.config import get_settings
 from app.db import get_db
 from app.deps import admin_staff, ready_staff
 from app.leave import MAX_REQUEST_DAYS, balances_for, count_days, type_by_code, types_for
-from app.models import LeaveRequest, Staff
+from app.models import LeaveRequest, Staff, XeroLeaveBalance
 
 router = APIRouter(prefix="/api", tags=["leave"])
 
@@ -48,6 +48,29 @@ def _balances_out(db: Session, staff: Staff, history: int = 0):
     return [x.to_dict(history) for x in b] if b is not None else None
 
 
+# App leave type -> words that identify the matching Xero leave type.
+XERO_MATCH = {"annual": ("annual",), "personal": ("personal", "carer", "sick"), "long_service": ("long service",)}
+
+
+def _xero_out(db: Session, staff: Staff) -> list[dict] | None:
+    if staff.location_type != "onshore":
+        return None
+    rows = db.query(XeroLeaveBalance).filter_by(staff_id=staff.staff_id).order_by(XeroLeaveBalance.leave_name).all()
+    if not rows:
+        return None
+    return [{"name": b.leave_name, "units": float(b.units), "unit_type": b.unit_type,
+             "fetched_at": b.fetched_at.isoformat()} for b in rows]
+
+
+def _xero_note(db: Session, staff: Staff, leave_type: str) -> str:
+    rows = db.query(XeroLeaveBalance).filter_by(staff_id=staff.staff_id).all()
+    words = XERO_MATCH.get(leave_type, ())
+    match = next((b for b in rows if any(w in b.leave_name.lower() for w in words)), None)
+    if match is None:
+        return "Balance is in Xero."
+    return f"Xero balance: {float(match.units):g} {match.unit_type.lower()} of {match.leave_name} (as of {match.fetched_at:%d %b})"
+
+
 @router.get("/leave/me")
 def my_leave(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db)):
     requests = (db.query(LeaveRequest).filter_by(staff_id=staff.staff_id)
@@ -59,6 +82,7 @@ def my_leave(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db))
         "types": [{"code": t.code, "label": t.label, "has_balance": t.accrual is not None}
                   for t in types_for(staff)],
         "balances": _balances_out(db, staff, history=12),
+        "xero_balances": _xero_out(db, staff),
         "requests": [_request_out(r, staff, admins) for r in requests],
         "today": today().isoformat(),
     }
@@ -139,7 +163,7 @@ def _with_balance_check(db: Session, r: LeaveRequest, staff: Staff, balances_cac
     elif staff.location_type == "offshore":
         out["balance_note"] = "No join date set, so no balance yet."
     else:
-        out["balance_note"] = "Balance is in Xero."
+        out["balance_note"] = _xero_note(db, staff, r.leave_type)
     return out
 
 

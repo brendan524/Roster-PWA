@@ -23,6 +23,9 @@ services:
       EARLY_GRACE_MINUTES: ${EARLY_GRACE_MINUTES:-10}
       KIOSK_LOCATIONS: ${KIOSK_LOCATIONS:-AB HQ:onshore,WrkPod:offshore}
       BACKUP_DRIVE_FOLDER_ID: ${BACKUP_DRIVE_FOLDER_ID:-}
+      XERO_CLIENT_ID: ${XERO_CLIENT_ID:-}
+      XERO_CLIENT_SECRET: ${XERO_CLIENT_SECRET:-}
+      XERO_REDIRECT_URI: https://${APP_DOMAIN}/api/admin/xero/callback
       TIMEZONE: ${TIMEZONE:-Australia/Melbourne}
       ROSTER_SOURCE: google
       ROSTER_SHEET_ID: ${ROSTER_SHEET_ID:?set ROSTER_SHEET_ID in .env}

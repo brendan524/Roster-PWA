@@ -27,6 +27,7 @@ const state = {
   leaveAdmin: null,   // /api/admin/leave
   leaveFormOpen: false,
   leaveMsg: null,
+  xero: null,         // /api/admin/xero/status (admins)
 };
 
 const app = document.getElementById("app");
@@ -552,12 +553,71 @@ function renderIssues() {
 // ---------- leave ----------
 
 async function loadLeave() {
-  const [mine, admin] = await Promise.all([
+  const isAdmin = state.me.role === "admin";
+  const [mine, admin, xero] = await Promise.all([
     api("/api/leave/me"),
-    state.me.role === "admin" ? api("/api/admin/leave") : Promise.resolve(null),
+    isAdmin ? api("/api/admin/leave") : Promise.resolve(null),
+    isAdmin ? api("/api/admin/xero/status").catch(() => null) : Promise.resolve(null),
   ]);
   state.leave = mine;
   state.leaveAdmin = admin;
+  state.xero = xero;
+}
+
+function fmtUnits(n, unit) {
+  const v = Math.round(n * 100) / 100;
+  const u = (unit || "hours").toLowerCase();
+  return `${v} ${v === 1 ? u.replace(/s$/, "") : u}`;
+}
+
+function xeroBalanceCards(list) {
+  return [
+    h("div", { class: "bal-grid" }, list.map((b) => h("div", { class: "bal" },
+      h("div", { class: "bal-label" }, b.name),
+      h("div", { class: "bal-num" }, String(Math.round(b.units * 100) / 100), h("span", {}, ` ${(b.unit_type || "hours").toLowerCase()}`)),
+    ))),
+    h("p", { class: "hint" }, `From Xero, updated ${fmtAgo(list[0].fetched_at)}. Requests you make here are recorded; Xero is updated by payroll.`),
+  ];
+}
+
+function xeroPanel(X) {
+  const reload = async () => { state.xero = await api("/api/admin/xero/status"); renderLeave(); };
+  if (!X.configured) {
+    return h("div", { class: "card xero" }, h("b", {}, "Xero (onshore balances)"),
+      h("p", { class: "hint" }, "Not set up on the server yet: add XERO_CLIENT_ID and XERO_CLIENT_SECRET to .env (see README → Xero)."));
+  }
+  if (!X.connected) {
+    return h("div", { class: "card xero" }, h("b", {}, "Xero (onshore balances)"),
+      h("p", { class: "hint" }, "Connect once so onshore staff can see their leave balances here. You'll sign in to Xero and approve read-only payroll access."),
+      h("a", { class: "btn", href: "/api/admin/xero/connect" }, "Connect Xero"));
+  }
+  const opts = (sel) => [h("option", { value: "" }, "— not linked —"),
+    ...X.xero_employees.map((e) => h("option", { value: e.id, selected: sel === e.id }, e.name))];
+  const syncBtn = h("button", { class: "icon-btn", onclick: async () => {
+    syncBtn.disabled = true; syncBtn.textContent = "Syncing…";
+    try { await api("/api/admin/xero/sync", { method: "POST" }); } catch (ex) { alert(ex.message); }
+    await reload();
+  } }, "Sync now");
+  return h("div", { class: "card xero" },
+    h("div", { class: "row1" }, h("b", {}, `Xero: ${X.tenant_name}`), syncBtn),
+    h("p", { class: "hint" }, X.last_sync_at ? `Last synced ${fmtAgo(X.last_sync_at)} (automatically every few hours).` : "Not synced yet."),
+    X.last_error ? h("p", { class: "form-error" }, X.last_error, " ", h("a", { href: "/api/admin/xero/connect" }, "Reconnect")) : null,
+    h("h3", { class: "xero-h" }, "Onshore staff ↔ Xero employees"),
+    X.staff.map((st) => h("div", { class: "xero-row" },
+      h("div", {}, h("b", {}, st.name),
+        st.balances.length ? h("div", { class: "meta" }, st.balances.map((b) => `${b.name}: ${fmtUnits(b.units, b.unit_type)}`).join(" · "))
+          : h("div", { class: "meta" }, st.link ? "No balances in Xero" : "Not linked — pick their Xero name")),
+      X.xero_employees.length ? h("select", { "aria-label": `Xero employee for ${st.name}`, onchange: async (e) => {
+        try { await api("/api/admin/xero/link", { method: "POST", body: { staff_id: st.staff_id, xero_employee_id: e.target.value || null } });
+          await api("/api/admin/xero/sync", { method: "POST" }).catch(() => {}); } catch (ex) { alert(ex.message); }
+        await reload();
+      } }, opts(st.link && st.link.xero_employee_id)) : null,
+    )),
+    h("button", { class: "link-btn dark", onclick: async () => {
+      if (!confirm("Disconnect Xero? Onshore balances will stop showing until you connect again.")) return;
+      await api("/api/admin/xero/disconnect", { method: "POST" }); await reload();
+    } }, "Disconnect Xero"),
+  );
 }
 
 function fmtDays(n) { const v = Math.round(n * 10) / 10; return `${v} day${v === 1 ? "" : "s"}`; }
@@ -689,6 +749,7 @@ function renderLeave() {
   let balanceBlock;
   if (L.balances) balanceBlock = balanceCards(L.balances);
   else if (L.location_type === "offshore") balanceBlock = emptyCard("Balance not set up yet", "It'll show once your start date is added. You can still apply.");
+  else if (L.xero_balances) balanceBlock = xeroBalanceCards(L.xero_balances);
   else balanceBlock = h("p", { class: "hint" }, "Your leave balances are kept in Xero. Ask Brendan or Aaron for your current balance.");
 
   render(
@@ -704,6 +765,7 @@ function renderLeave() {
     upcoming.length ? [h("h2", { class: "month-title" }, "Requests"), ...upcoming.map((r) => requestCard(r))] : null,
     past.length ? [h("h2", { class: "month-title" }, "Past"), ...past.slice(0, 10).map((r) => requestCard(r))] : null,
     A ? adminLeaveExtras(A) : null,
+    state.xero ? [h("h2", { class: "month-title" }, "Xero"), xeroPanel(state.xero)] : null,
   );
 }
 
@@ -887,12 +949,20 @@ async function route() {
   }
 }
 
+const xeroReturn = new URLSearchParams(location.search).get("xero");
+if (xeroReturn) history.replaceState(null, "", "/");
+
 async function start() {
   state.roster = null; state.admin = null; state.tab = "mine"; state.clockData = null; state.clockDay = null;
   state.clock = null; state.clockMsg = null;
   state.leave = null; state.leaveAdmin = null; state.leaveFormOpen = false; state.leaveMsg = null;
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
+  if (xeroReturn && state.me.role === "admin") {
+    state.tab = "leave";
+    state.leaveMsg = { connected: "Xero connected. Onshore balances are syncing.", cancelled: "Xero connection was cancelled.",
+      failed: "Couldn't connect to Xero. Please try again." }[xeroReturn] || null;
+  }
   await route();
   flushMine();
   if (state.me.role === "admin") {
