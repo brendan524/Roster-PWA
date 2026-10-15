@@ -15,6 +15,7 @@ from app.db import get_db
 from app.deps import admin_staff, ready_staff
 from app.leave import (
     MAX_BACKDATE_DAYS,
+    NOTICE_DAYS,
     MAX_REQUEST_DAYS,
     balances_for,
     count_days,
@@ -137,6 +138,7 @@ def my_leave(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db))
         "types": [{"code": t.code, "label": t.label, "has_balance": t.accrual is not None,
                    "advance_only": t.advance_only} for t in types_for(staff, _long_service_ok(db, staff), _is_casual(db, staff))],
         "max_backdate_days": MAX_BACKDATE_DAYS,
+        "notice_days": NOTICE_DAYS,
         "balances": _balances_out(db, staff, history=12),
         "xero_balances": _xero_out(db, staff),
         "requests": [_request_out(r, staff, admins, files) for r in requests],
@@ -166,8 +168,10 @@ def apply_for_leave(body: LeaveIn, staff: Staff = Depends(ready_staff), db: Sess
         raise HTTPException(400, f"One request can cover at most {MAX_REQUEST_DAYS} days. Split it into two.")
     if len(body.reason.strip()) < 3:
         raise HTTPException(400, "Please give a reason for your leave.")
-    if lt.advance_only and body.start_date <= today():
-        raise HTTPException(400, f"{lt.label} has to be requested in advance — choose a start date after today.")
+    if lt.advance_only and body.start_date < today() + timedelta(days=NOTICE_DAYS):
+        earliest = today() + timedelta(days=NOTICE_DAYS)
+        raise HTTPException(400, f"{lt.label} needs at least {NOTICE_DAYS} days' notice — the earliest start date "
+                                 f"is {earliest:%a %-d %b}. If it's urgent, talk to Brendan or Aaron.")
     if body.start_date < today() - timedelta(days=MAX_BACKDATE_DAYS):
         raise HTTPException(400, f"That's more than {MAX_BACKDATE_DAYS} days ago. Ask an admin to record it.")
     days = count_days(body.start_date, body.end_date, body.start_half, body.end_half)

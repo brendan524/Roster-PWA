@@ -36,7 +36,7 @@ class LeaveType:
     label: str
     accrual: Decimal | None = None  # days per month; None = no balance kept by this app
     cap: Decimal | None = None
-    advance_only: bool = True  # must start after today; False = can also be for past dates (e.g. sick)
+    advance_only: bool = True  # needs NOTICE_DAYS' notice; False = can be today or past dates (e.g. sick)
 
 
 OFFSHORE_TYPES = [
@@ -51,6 +51,7 @@ ONSHORE_TYPES = [
     LeaveType("unpaid", "Unpaid leave"),
 ]
 MAX_BACKDATE_DAYS = 60  # how far back personal/sick leave can be requested
+NOTICE_DAYS = 7  # advance-only leave must start at least this many days after the request
 LONG_SERVICE_YEARS = 7  # long service leave is hidden from staff until this much service
 
 

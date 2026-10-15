@@ -130,15 +130,15 @@ def test_onshore_has_no_app_balance_and_own_types(client, fixed_today):
     login(client, "AB0010")
     me = client.get("/api/leave/me").json()
     assert me["balances"] is None and "annual" in [t["code"] for t in me["types"]]
-    assert apply(client, "2026-10-20", "2026-10-20", code="vacation").status_code == 400
-    assert apply(client, "2026-10-20", "2026-10-20", code="annual").status_code == 200
+    assert apply(client, "2026-10-27", "2026-10-27", code="vacation").status_code == 400
+    assert apply(client, "2026-10-27", "2026-10-27", code="annual").status_code == 200
 
 
 def test_apply_approve_and_balance_updates(client, fixed_today):
     offshore("AB0003")
     add_staff("AB0001", None, role="admin")
     login(client, "AB0003")
-    r = apply(client, "2026-10-19", "2026-10-23", end_half=True, reason="Family trip")  # Mon–Fri, half Fri
+    r = apply(client, "2026-10-26", "2026-10-30", end_half=True, reason="Family trip")  # Mon–Fri, half Fri
     assert r.status_code == 200 and r.json()["days"] == 4.5 and r.json()["status"] == "pending"
     rid = r.json()["id"]
     client.post("/api/auth/logout")
@@ -157,8 +157,8 @@ def test_apply_approve_and_balance_updates(client, fixed_today):
 def test_overlapping_requests_are_refused(client, fixed_today):
     offshore("AB0003")
     login(client, "AB0003")
-    assert apply(client, "2026-10-19", "2026-10-21").status_code == 200
-    r = apply(client, "2026-10-21", "2026-10-22")
+    assert apply(client, "2026-10-26", "2026-10-28").status_code == 200
+    r = apply(client, "2026-10-28", "2026-10-29")
     assert r.status_code == 409 and "already" in r.json()["detail"]
 
 
@@ -166,7 +166,7 @@ def test_cancel_only_own_pending(client, fixed_today):
     offshore("AB0003")
     offshore("AB0006")
     login(client, "AB0003")
-    rid = apply(client, "2026-10-19", "2026-10-19").json()["id"]
+    rid = apply(client, "2026-10-26", "2026-10-26").json()["id"]
     client.post("/api/auth/logout")
     login(client, "AB0006")
     assert client.post(f"/api/leave/requests/{rid}/cancel").status_code == 404  # not theirs
@@ -174,14 +174,14 @@ def test_cancel_only_own_pending(client, fixed_today):
     login(client, "AB0003")
     assert client.post(f"/api/leave/requests/{rid}/cancel").json()["status"] == "cancelled"
     assert client.post(f"/api/leave/requests/{rid}/cancel").status_code == 409
-    assert apply(client, "2026-10-19", "2026-10-19").status_code == 200  # dates free again
+    assert apply(client, "2026-10-26", "2026-10-26").status_code == 200  # dates free again
 
 
 @pytest.mark.parametrize("start,end,msg", [
-    ("2026-10-23", "2026-10-19", "before the start"),
+    ("2026-10-30", "2026-10-26", "before the start"),
     ("2026-10-24", "2026-10-25", "working days"),
-    ("2026-10-15", "2026-10-16", "in advance"),  # vacation can't start today
-    ("2026-10-01", "2026-10-02", "in advance"),
+    ("2026-10-15", "2026-10-16", "notice"),  # vacation can't start today
+    ("2026-10-01", "2026-10-02", "notice"),
     ("2026-11-01", "2027-03-01", "at most"),
 ])
 def test_bad_requests(client, fixed_today, start, end, msg):
@@ -194,7 +194,7 @@ def test_bad_requests(client, fixed_today, start, end, msg):
 def test_staff_cannot_approve(client, fixed_today):
     offshore("AB0003")
     login(client, "AB0003")
-    rid = apply(client, "2026-10-19", "2026-10-19").json()["id"]
+    rid = apply(client, "2026-10-26", "2026-10-26").json()["id"]
     assert client.get("/api/admin/leave").status_code == 403
     assert client.post(f"/api/admin/leave/{rid}/decide", json={"decision": "approve"}).status_code == 403
 
@@ -203,7 +203,7 @@ def test_staff_only_see_their_own_requests(client, fixed_today):
     offshore("AB0003")
     offshore("AB0006")
     login(client, "AB0003")
-    apply(client, "2026-10-19", "2026-10-19", reason="private reason")
+    apply(client, "2026-10-26", "2026-10-26", reason="private reason")
     client.post("/api/auth/logout")
     login(client, "AB0006")
     body = client.get("/api/leave/me").json()
@@ -214,7 +214,7 @@ def test_join_date_missing(client, fixed_today):
     offshore("AB0003", join=None)
     login(client, "AB0003")
     assert client.get("/api/leave/me").json()["balances"] is None
-    assert apply(client, "2026-10-19", "2026-10-19").status_code == 200  # can still apply
+    assert apply(client, "2026-10-26", "2026-10-26").status_code == 200  # can still apply
 
 
 def test_far_future_dates_still_need_working_days(client, fixed_today):
@@ -228,7 +228,7 @@ def test_reason_is_required(client, fixed_today):
     offshore("AB0003")
     login(client, "AB0003")
     for reason in ("", "  ", "x"):
-        r = apply(client, "2026-10-19", "2026-10-19", reason=reason)
+        r = apply(client, "2026-10-26", "2026-10-26", reason=reason)
         assert r.status_code == 400 and "reason" in r.json()["detail"]
 
 
@@ -252,8 +252,9 @@ def test_onshore_advance_only_types(client, fixed_today, code):
         db.get(Staff, "AB0010").join_date = date(2015, 1, 1)  # long service needs 7 years
         db.commit()
     login(client, "AB0010")
-    assert apply(client, "2026-10-15", "2026-10-16", code=code).status_code == 400
-    assert apply(client, "2026-10-16", "2026-10-16", code=code).status_code == 200
+    r = apply(client, "2026-10-21", "2026-10-21", code=code)  # 6 days' notice
+    assert r.status_code == 400 and "earliest start date is Thu 22 Oct" in r.json()["detail"]
+    assert apply(client, "2026-10-22", "2026-10-22", code=code).status_code == 200
 
 
 # ---- attachments ----------------------------------------------------------------------
@@ -300,7 +301,7 @@ def test_attach_view_and_permissions(client, fixed_today):
 def test_attachment_rules(client, fixed_today):
     offshore("AB0003")
     login(client, "AB0003")
-    rid = apply(client, "2026-10-19", "2026-10-19", reason="Trip").json()["id"]
+    rid = apply(client, "2026-10-26", "2026-10-26", reason="Trip").json()["id"]
     assert upload(client, rid, b"MZ\x90\x00 not a pdf", "virus.pdf").status_code == 415  # real type checked
     assert upload(client, rid, b"<html><script>alert(1)</script>", "x.png").status_code == 415
     assert upload(client, rid, b"").status_code == 400

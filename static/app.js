@@ -874,11 +874,12 @@ function leaveForm(L) {
   const typeHint = h("p", { class: "hint" });
   const preview = h("p", { class: "leave-preview" });
   const ehWrap = h("label", { class: "check", for: "leh" }, eh, " Last day is a half day");
-  const tomorrow = shiftDays(L.today, 1);
+  const notice = L.notice_days || 7;
+  const earliest = shiftDays(L.today, notice);
   const update = () => {
     const t = L.types.find((x) => x.code === type.value);
-    start.min = t.advance_only ? tomorrow : shiftDays(L.today, -(L.max_backdate_days || 60));
-    typeHint.textContent = t.advance_only ? "Must be requested in advance (start date after today)."
+    start.min = t.advance_only ? earliest : shiftDays(L.today, -(L.max_backdate_days || 60));
+    typeHint.textContent = t.advance_only ? `Needs at least ${notice} days' notice — earliest start ${fmtDay(earliest)}.`
       : "Can be for today or past dates (up to 60 days back), e.g. if you were sick.";
     if (start.value && start.value < start.min) start.value = "";
     if (start.value && (!end.value || end.value < start.value)) end.value = start.value;
