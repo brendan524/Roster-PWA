@@ -66,6 +66,10 @@ def seed_staff(path: str) -> int:
         def err(msg: str) -> None:
             errors.append(f"line {n} ({v['staff_id'] or '?'}): {msg}")
 
+        if r.get(None):  # DictReader puts surplus fields under the None key
+            err("has more columns than the header — usually a comma inside a field "
+                "(wrap that field in double quotes)")
+
         if not re.fullmatch(r"[A-Z0-9_-]{2,32}", v["staff_id"]):
             err("staff_id must be letters/numbers, e.g. AB0001")
         if v["staff_id"] in seen_ids:

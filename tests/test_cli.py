@@ -95,3 +95,11 @@ def test_reseed_without_role_column_keeps_admin(tmp_path):
     seed_staff(str(p))
     with SessionLocal() as db:
         assert db.get(Staff, "AB0001").role == "admin"
+
+
+def test_row_with_unquoted_comma_is_rejected(tmp_path, capsys):
+    p = tmp_path / "s.csv"
+    p.write_text("Staff ID,Name,Location Type,Notes\n"
+                 "AB0016,Jody Wilms,Onshore,First Aid instructor (public bookings, AB HQ)\n")
+    assert seed_staff(str(p)) == 1
+    assert "more columns than the header" in capsys.readouterr().err
