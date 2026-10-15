@@ -97,9 +97,22 @@ docker compose exec roster-app python -m app.cli deactivate AB0003       # can't
 
 ### Backups
 
-Postgres holds staff now, and will hold clock-ins from Stage 2. Set up a nightly `pg_dump` **before Stage 2 goes live**, e.g.:
+`deploy/backup.sh` dumps the database to `/root/backups/ab-roster/` (compressed, private to root), checks the dump isn't empty, and keeps 30 days. Install the nightly run once:
+
 ```bash
-docker compose exec -T roster-db pg_dump -U roster roster | gzip > /backups/roster-$(date +%F).sql.gz
+cd ~/ab-roster && chmod 700 deploy/backup.sh
+./deploy/backup.sh                       # run once now; should print "backup OK"
+(crontab -l 2>/dev/null; echo "15 2 * * * $PWD/deploy/backup.sh >> /root/backups/ab-roster/backup.log 2>&1") | crontab -
+crontab -l                               # confirm the line is there
+```
+
+Check it's running: `tail /root/backups/ab-roster/backup.log`. Backups on the same server don't survive the server being lost, so also turn on Hostinger's VPS backups or snapshots, or copy the folder off-site.
+
+**Restore** (replaces the current data with the backup):
+```bash
+cd ~/ab-roster
+gunzip -c /root/backups/ab-roster/roster-YYYY-MM-DD-HHMM.sql.gz | docker compose exec -T roster-db psql -U roster -q roster
+docker compose restart roster-app
 ```
 
 ## Local development
