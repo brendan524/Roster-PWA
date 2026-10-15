@@ -36,19 +36,21 @@ class LeaveType:
     label: str
     accrual: Decimal | None = None  # days per month; None = no balance kept by this app
     cap: Decimal | None = None
+    advance_only: bool = True  # must start after today; False = can also be for past dates (e.g. sick)
 
 
 OFFSHORE_TYPES = [
     LeaveType("vacation", "Vacation leave", Decimal("1"), Decimal("10")),
-    LeaveType("sick", "Sick leave", Decimal("0.5")),
+    LeaveType("sick", "Sick leave", Decimal("0.5"), advance_only=False),
     LeaveType("unpaid", "Unpaid leave"),
 ]
 ONSHORE_TYPES = [
     LeaveType("annual", "Annual leave"),
-    LeaveType("personal", "Personal / carer's leave"),
+    LeaveType("personal", "Personal / carer's leave", advance_only=False),
     LeaveType("long_service", "Long service leave"),
     LeaveType("unpaid", "Unpaid leave"),
 ]
+MAX_BACKDATE_DAYS = 60  # how far back personal/sick leave can be requested
 
 
 def types_for(staff: Staff) -> list[LeaveType]:

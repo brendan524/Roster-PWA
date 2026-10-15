@@ -638,6 +638,50 @@ function previewDays(start, end, sh, eh) {
   return Math.max(n, 0);
 }
 
+const MAX_FILE_MB = 10;
+
+async function uploadFile(requestId, file) {
+  if (file.size > MAX_FILE_MB * 1024 * 1024) throw new Error(`${file.name} is over ${MAX_FILE_MB} MB.`);
+  let res;
+  try {
+    res = await fetch(`/api/leave/requests/${requestId}/attachments`, {
+      method: "POST", credentials: "same-origin", body: file,
+      headers: { "x-ab-app": "1", "x-filename": encodeURIComponent(file.name), "content-type": "application/octet-stream" },
+    });
+  } catch { throw new Error("No connection — the file wasn't uploaded."); }
+  if (!res.ok) {
+    let msg = "Upload failed.";
+    try { msg = (await res.json()).detail || msg; } catch { /* empty */ }
+    throw new Error(`${file.name}: ${msg}`);
+  }
+}
+
+function fmtSize(n) { return n > 1024 * 1024 ? `${(n / 1024 / 1024).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`; }
+
+function attachmentList(r, { canRemove = false } = {}) {
+  if (!r.attachments || !r.attachments.length) return null;
+  return h("ul", { class: "files" }, r.attachments.map((a) => h("li", {},
+    h("a", { href: `/api/leave/attachments/${a.id}`, target: "_blank", rel: "noopener" }, `📎 ${a.filename}`),
+    h("span", { class: "meta" }, ` ${fmtSize(a.size)}`),
+    canRemove ? h("button", { class: "link-btn dark small", "aria-label": `Remove ${a.filename}`, onclick: async () => {
+      if (!confirm(`Remove ${a.filename}?`)) return;
+      try { await api(`/api/leave/attachments/${a.id}`, { method: "DELETE" }); await loadLeave(); renderLeave(); }
+      catch (ex) { alert(ex.message); }
+    } }, "Remove") : null,
+  )));
+}
+
+function addFileButton(r) {
+  const input = h("input", { type: "file", accept: "application/pdf,image/*", multiple: true, hidden: true });
+  input.addEventListener("change", async () => {
+    const errors = [];
+    for (const f of input.files) { try { await uploadFile(r.id, f); } catch (ex) { errors.push(ex.message); } }
+    if (errors.length) alert(errors.join("\n"));
+    await loadLeave(); renderLeave();
+  });
+  return h("span", {}, input, h("button", { class: "link-btn dark", onclick: () => input.click() }, "Add a file"));
+}
+
 const STATUS_LABEL = { pending: "Waiting for approval", approved: "Approved", declined: "Declined", cancelled: "Cancelled" };
 
 function balanceCards(bals) {
@@ -660,10 +704,20 @@ function leaveForm(L) {
   const end = h("input", { type: "date", id: "le", required: true });
   const sh = h("input", { type: "checkbox", id: "lsh" });
   const eh = h("input", { type: "checkbox", id: "leh" });
-  const reason = h("input", { type: "text", id: "lr", maxlength: "500", placeholder: "Optional" });
+  const reason = h("input", { type: "text", id: "lr", maxlength: "500", "aria-required": "true",
+    placeholder: "e.g. family holiday, sick with flu, caring for my child" });
+  const files = h("input", { type: "file", id: "lf", accept: "application/pdf,image/*", multiple: true });
+  reason.addEventListener("input", () => { if (reason.value.trim().length >= 3) err.hidden = true; });
+  const typeHint = h("p", { class: "hint" });
   const preview = h("p", { class: "leave-preview" });
   const ehWrap = h("label", { class: "check", for: "leh" }, eh, " Last day is a half day");
+  const tomorrow = shiftDays(L.today, 1);
   const update = () => {
+    const t = L.types.find((x) => x.code === type.value);
+    start.min = t.advance_only ? tomorrow : shiftDays(L.today, -(L.max_backdate_days || 60));
+    typeHint.textContent = t.advance_only ? "Must be requested in advance (start date after today)."
+      : "Can be for today or past dates (up to 60 days back), e.g. if you were sick.";
+    if (start.value && start.value < start.min) start.value = "";
     if (start.value && (!end.value || end.value < start.value)) end.value = start.value;
     end.min = start.value || "";
     ehWrap.hidden = !end.value || end.value === start.value;
@@ -677,28 +731,39 @@ function leaveForm(L) {
     preview.textContent = text;
   };
   [type, start, end, sh, eh].forEach((el) => el.addEventListener("change", update));
+  update();
   const btn = h("button", { class: "btn", type: "submit" }, "Send request");
   return h("form", {
     class: "card leave-form", onsubmit: async (e) => {
-      e.preventDefault(); err.hidden = true; btn.disabled = true;
+      e.preventDefault(); err.hidden = true;
+      if (reason.value.trim().length < 3) { err.textContent = "Please give a reason for your leave."; err.hidden = false; reason.focus(); return; }
+      const big = [...files.files].find((f) => f.size > MAX_FILE_MB * 1024 * 1024);
+      if (big) { err.textContent = `${big.name} is over ${MAX_FILE_MB} MB.`; err.hidden = false; return; }
+      btn.disabled = true;
       try {
-        await api("/api/leave/requests", { method: "POST", body: {
+        const created = await api("/api/leave/requests", { method: "POST", body: {
           leave_type: type.value, start_date: start.value, end_date: end.value,
           start_half: sh.checked, end_half: !ehWrap.hidden && eh.checked, reason: reason.value,
         } });
+        const failed = [];
+        for (const f of files.files) { try { await uploadFile(created.id, f); } catch (ex) { failed.push(ex.message); } }
         state.leaveFormOpen = false;
-        state.leaveMsg = "Request sent. You'll see it here once it's approved.";
+        state.leaveMsg = failed.length
+          ? `Request sent, but a file didn't upload (${failed.join("; ")}). Use "Add a file" on your request below to try again.`
+          : "Request sent. You'll see it here once it's approved.";
         await loadLeave(); renderTabbar(); renderLeave();
       } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     },
   },
-    h("label", { for: "lt" }, "Type of leave"), type,
+    h("label", { for: "lt" }, "Type of leave"), type, typeHint,
     h("div", { class: "date-row" },
       h("div", {}, h("label", { for: "ls" }, "From"), start),
       h("div", {}, h("label", { for: "le" }, "To"), end)),
     h("label", { class: "check", for: "lsh" }, sh, " First day is a half day"),
     ehWrap,
     h("label", { for: "lr" }, "Reason"), reason,
+    h("label", { for: "lf" }, "Attachments (optional)"), files,
+    h("p", { class: "hint" }, "e.g. a medical certificate. PDF or photo, up to 10 MB each. You can also add files later."),
     preview, err, btn,
     h("button", { class: "link-btn dark", type: "button", onclick: () => { state.leaveFormOpen = false; renderLeave(); } }, "Cancel"),
   );
@@ -718,6 +783,8 @@ function requestCard(r, { admin = false } = {}) {
     h("div", {}, `${fmtRange(r)} · ${fmtDays(r.days)}`),
     r.reason ? h("div", { class: "meta" }, `“${r.reason}”`) : null,
     note, balInfo, decided,
+    attachmentList(r, { canRemove: !admin && r.status === "pending" }),
+    !admin && (r.status === "pending" || r.status === "approved") && (r.attachments || []).length < 5 ? addFileButton(r) : null,
     !admin && r.status === "pending" ? h("button", { class: "link-btn dark", onclick: async () => {
       if (!confirm("Cancel this leave request?")) return;
       try { await api(`/api/leave/requests/${r.id}/cancel`, { method: "POST" }); await loadLeave(); renderTabbar(); renderLeave(); }

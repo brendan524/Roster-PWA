@@ -4,15 +4,16 @@ from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi.responses import Response
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
 from app.deps import admin_staff, ready_staff
-from app.leave import MAX_REQUEST_DAYS, balances_for, count_days, type_by_code, types_for
-from app.models import LeaveRequest, Staff, XeroLeaveBalance
+from app.leave import MAX_BACKDATE_DAYS, MAX_REQUEST_DAYS, balances_for, count_days, type_by_code, types_for
+from app.models import LeaveAttachment, LeaveRequest, Staff, XeroLeaveBalance
 
 router = APIRouter(prefix="/api", tags=["leave"])
 
@@ -21,9 +22,24 @@ def today() -> date:
     return datetime.now(ZoneInfo(get_settings().timezone)).date()
 
 
-def _request_out(r: LeaveRequest, staff: Staff | None = None, names: dict[str, str] | None = None) -> dict:
+def _attachments(db: Session, request_ids: list[int]) -> dict[int, list[dict]]:
+    out: dict[int, list[dict]] = {}
+    if not request_ids:
+        return out
+    rows = (db.query(LeaveAttachment.id, LeaveAttachment.request_id, LeaveAttachment.filename,
+                     LeaveAttachment.content_type, LeaveAttachment.size)
+            .filter(LeaveAttachment.request_id.in_(request_ids)).order_by(LeaveAttachment.id))
+    for a in rows:
+        out.setdefault(a.request_id, []).append(
+            {"id": a.id, "filename": a.filename, "content_type": a.content_type, "size": a.size})
+    return out
+
+
+def _request_out(r: LeaveRequest, staff: Staff | None = None, names: dict[str, str] | None = None,
+                 files: dict[int, list[dict]] | None = None) -> dict:
     lt = type_by_code(staff, r.leave_type) if staff else None
     return {
+        "attachments": (files or {}).get(r.id, []),
         "id": r.id,
         "staff_id": r.staff_id,
         "name": staff.name if staff else None,
@@ -76,14 +92,16 @@ def my_leave(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db))
     requests = (db.query(LeaveRequest).filter_by(staff_id=staff.staff_id)
                 .order_by(LeaveRequest.start_date.desc(), LeaveRequest.id.desc()).limit(50).all())
     admins = {s.staff_id: s.name for s in db.query(Staff).filter_by(role="admin")}
+    files = _attachments(db, [r.id for r in requests])
     return {
         "location_type": staff.location_type,
         "join_date": staff.join_date.isoformat() if staff.join_date else None,
-        "types": [{"code": t.code, "label": t.label, "has_balance": t.accrual is not None}
-                  for t in types_for(staff)],
+        "types": [{"code": t.code, "label": t.label, "has_balance": t.accrual is not None,
+                   "advance_only": t.advance_only} for t in types_for(staff)],
+        "max_backdate_days": MAX_BACKDATE_DAYS,
         "balances": _balances_out(db, staff, history=12),
         "xero_balances": _xero_out(db, staff),
-        "requests": [_request_out(r, staff, admins) for r in requests],
+        "requests": [_request_out(r, staff, admins, files) for r in requests],
         "today": today().isoformat(),
     }
 
@@ -106,8 +124,12 @@ def apply_for_leave(body: LeaveIn, staff: Staff = Depends(ready_staff), db: Sess
         raise HTTPException(400, "The end date is before the start date.")
     if (body.end_date - body.start_date).days >= MAX_REQUEST_DAYS:
         raise HTTPException(400, f"One request can cover at most {MAX_REQUEST_DAYS} days. Split it into two.")
-    if body.start_date < today() - timedelta(days=60):
-        raise HTTPException(400, "That's more than 60 days ago. Ask an admin to record it.")
+    if len(body.reason.strip()) < 3:
+        raise HTTPException(400, "Please give a reason for your leave.")
+    if lt.advance_only and body.start_date <= today():
+        raise HTTPException(400, f"{lt.label} has to be requested in advance — choose a start date after today.")
+    if body.start_date < today() - timedelta(days=MAX_BACKDATE_DAYS):
+        raise HTTPException(400, f"That's more than {MAX_BACKDATE_DAYS} days ago. Ask an admin to record it.")
     days = count_days(body.start_date, body.end_date, body.start_half, body.end_half)
     if days <= 0:
         raise HTTPException(400, "Those dates don't include any working days (Mon–Fri).")
@@ -148,8 +170,9 @@ def cancel_leave(request_id: int, staff: Staff = Depends(ready_staff), db: Sessi
 
 # ---- admin --------------------------------------------------------------------
 
-def _with_balance_check(db: Session, r: LeaveRequest, staff: Staff, balances_cache: dict) -> dict:
-    out = _request_out(r, staff)
+def _with_balance_check(db: Session, r: LeaveRequest, staff: Staff, balances_cache: dict,
+                        files: dict[int, list[dict]] | None = None) -> dict:
+    out = _request_out(r, staff, files=files)
     if staff.staff_id not in balances_cache:
         balances_cache[staff.staff_id] = balances_for(db, staff, today())
     bals = balances_cache[staff.staff_id]
@@ -179,10 +202,11 @@ def admin_leave(_: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
               .filter(LeaveRequest.status.in_(("approved", "declined", "cancelled")), LeaveRequest.end_date >= since)
               .order_by(LeaveRequest.start_date.desc()).limit(100).all())
     offshore = sorted((s for s in staff.values() if s.location_type == "offshore" and s.active), key=lambda s: s.name)
+    files = _attachments(db, [r.id for r in pending + recent])
     return {
         "today": today().isoformat(),
-        "pending": [_with_balance_check(db, r, staff[r.staff_id], cache) for r in pending],
-        "recent": [_request_out(r, staff[r.staff_id], names) for r in recent],
+        "pending": [_with_balance_check(db, r, staff[r.staff_id], cache, files) for r in pending],
+        "recent": [_request_out(r, staff[r.staff_id], names, files) for r in recent],
         "balances": [{"staff_id": s.staff_id, "name": s.name,
                       "join_date": s.join_date.isoformat() if s.join_date else None,
                       "balances": _balances_out(db, s, history=24)} for s in offshore],
@@ -207,3 +231,96 @@ def decide(request_id: int, body: DecisionIn, admin: Staff = Depends(admin_staff
     req.decision_note = body.note.strip()
     db.commit()
     return _request_out(req, db.get(Staff, req.staff_id))
+
+
+# ---- attachments --------------------------------------------------------------------
+
+MAX_ATTACHMENT_BYTES = 10 * 1024 * 1024
+MAX_ATTACHMENTS = 5
+HEIF_BRANDS = {b"heic", b"heix", b"hevc", b"hevx", b"mif1", b"msf1", b"heim", b"heis"}
+
+
+def sniff_type(data: bytes) -> str | None:
+    """Real file type from its first bytes (never trust the name or the browser's claim)."""
+    if data.startswith(b"%PDF-"):
+        return "application/pdf"
+    if data.startswith(b"\xff\xd8\xff"):
+        return "image/jpeg"
+    if data.startswith(b"\x89PNG\r\n\x1a\n"):
+        return "image/png"
+    if data[:4] == b"RIFF" and data[8:12] == b"WEBP":
+        return "image/webp"
+    if data[4:8] == b"ftyp" and data[8:12] in HEIF_BRANDS:
+        return "image/heic"
+    return None
+
+
+def _safe_filename(name: str, content_type: str) -> str:
+    import re
+    from urllib.parse import unquote
+
+    name = re.sub(r"[^A-Za-z0-9 ._()-]+", "_", unquote(name or "")).strip(" ._") or "attachment"
+    ext = {"application/pdf": ".pdf", "image/jpeg": ".jpg", "image/png": ".png", "image/webp": ".webp",
+           "image/heic": ".heic"}[content_type]
+    stem = name.rsplit(".", 1)[0] if "." in name else name
+    return f"{stem[:120]}{ext}"
+
+
+@router.post("/leave/requests/{request_id}/attachments")
+async def add_attachment(request_id: int, request: Request, staff: Staff = Depends(ready_staff),
+                         db: Session = Depends(get_db)):
+    """Upload one file as the raw request body; its name goes in the X-Filename header."""
+    import hashlib
+
+    req = db.query(LeaveRequest).filter_by(id=request_id, staff_id=staff.staff_id).first()
+    if req is None:
+        raise HTTPException(404, "Request not found.")
+    if req.status in ("cancelled", "declined"):
+        raise HTTPException(409, f"That request was {req.status}, so files can't be added.")
+    if db.query(LeaveAttachment).filter_by(request_id=req.id).count() >= MAX_ATTACHMENTS:
+        raise HTTPException(409, f"A request can have at most {MAX_ATTACHMENTS} files.")
+    body = bytearray()
+    async for chunk in request.stream():
+        body += chunk
+        if len(body) > MAX_ATTACHMENT_BYTES:
+            raise HTTPException(413, "That file is too big (10 MB maximum). Try a smaller photo or a PDF.")
+    data = bytes(body)
+    if not data:
+        raise HTTPException(400, "The file is empty.")
+    ctype = sniff_type(data)
+    if ctype is None:
+        raise HTTPException(415, "Only PDFs and photos (JPG, PNG, HEIC, WEBP) can be attached.")
+    att = LeaveAttachment(request_id=req.id, filename=_safe_filename(request.headers.get("x-filename", ""), ctype),
+                          content_type=ctype, size=len(data), sha256=hashlib.sha256(data).hexdigest(), data=data,
+                          uploaded_by=staff.staff_id)
+    db.add(att)
+    db.commit()
+    return {"id": att.id, "filename": att.filename, "content_type": ctype, "size": att.size}
+
+
+@router.get("/leave/attachments/{attachment_id}")
+def get_attachment(attachment_id: int, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db)):
+    att = db.get(LeaveAttachment, attachment_id)
+    req = db.get(LeaveRequest, att.request_id) if att else None
+    if att is None or req is None or (req.staff_id != staff.staff_id and not staff.is_admin):
+        raise HTTPException(404, "File not found.")
+    inline = att.content_type in ("application/pdf", "image/jpeg", "image/png", "image/webp")
+    return Response(att.data, media_type=att.content_type, headers={
+        "Content-Disposition": f'{"inline" if inline else "attachment"}; filename="{att.filename}"',
+        "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; sandbox",
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "private, no-store",
+    })
+
+
+@router.delete("/leave/attachments/{attachment_id}")
+def delete_attachment(attachment_id: int, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db)):
+    att = db.get(LeaveAttachment, attachment_id)
+    req = db.get(LeaveRequest, att.request_id) if att else None
+    if att is None or req is None or req.staff_id != staff.staff_id:
+        raise HTTPException(404, "File not found.")
+    if req.status != "pending":
+        raise HTTPException(409, "Files can only be removed while the request is waiting for approval.")
+    db.delete(att)
+    db.commit()
+    return {"ok": True}

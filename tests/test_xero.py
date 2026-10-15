@@ -195,7 +195,8 @@ def test_approver_sees_matching_xero_balance(admin, fake):
     connect(admin)
     admin.post("/api/auth/logout")
     login(admin, "AB0010")
-    admin.post("/api/leave/requests", json={"leave_type": "annual", "start_date": "2027-01-04", "end_date": "2027-01-04"})
+    admin.post("/api/leave/requests", json={"leave_type": "annual", "start_date": "2027-01-04", "end_date": "2027-01-04",
+                                                   "reason": "Holiday"})
     admin.post("/api/auth/logout")
     login(admin, "AB0001")
     [p] = admin.get("/api/admin/leave").json()["pending"]

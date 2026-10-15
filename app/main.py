@@ -36,7 +36,7 @@ async def security(request: Request, call_next):
             return JSONResponse({"detail": "Missing app header."}, status_code=403)
 
     response = await call_next(request)
-    response.headers["Content-Security-Policy"] = CSP
+    response.headers.setdefault("Content-Security-Policy", CSP)  # attachments set a stricter one
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Referrer-Policy"] = "same-origin"
     response.headers["Permissions-Policy"] = "camera=(), microphone=(), geolocation=(self)"

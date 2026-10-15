@@ -1,6 +1,6 @@
 from datetime import date, datetime
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, Numeric, String, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, Numeric, String, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -203,3 +203,19 @@ class XeroLeaveBalance(Base):
     units: Mapped[float] = mapped_column(Numeric(10, 4))
     unit_type: Mapped[str] = mapped_column(String(20), default="Hours")
     fetched_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+
+
+class LeaveAttachment(Base):
+    """A file on a leave request (e.g. a medical certificate). Stored in the database so backups include it."""
+
+    __tablename__ = "leave_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    request_id: Mapped[int] = mapped_column(ForeignKey("leave_requests.id", ondelete="CASCADE"), index=True)
+    filename: Mapped[str] = mapped_column(String(200))
+    content_type: Mapped[str] = mapped_column(String(60))
+    size: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    uploaded_by: Mapped[str] = mapped_column(String(32))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())

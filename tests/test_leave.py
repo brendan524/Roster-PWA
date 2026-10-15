@@ -112,7 +112,8 @@ def offshore(staff_id, join=date(2026, 3, 15)):
 
 
 def apply(client, start, end, code="vacation", **kw):
-    return client.post("/api/leave/requests", json={"leave_type": code, "start_date": start, "end_date": end, **kw})
+    body = {"leave_type": code, "start_date": start, "end_date": end, "reason": "Family", **kw}
+    return client.post("/api/leave/requests", json=body)
 
 
 def test_offshore_balance_view(client, fixed_today):
@@ -179,7 +180,8 @@ def test_cancel_only_own_pending(client, fixed_today):
 @pytest.mark.parametrize("start,end,msg", [
     ("2026-10-23", "2026-10-19", "before the start"),
     ("2026-10-24", "2026-10-25", "working days"),
-    ("2026-01-01", "2026-01-02", "60 days ago"),
+    ("2026-10-15", "2026-10-16", "in advance"),  # vacation can't start today
+    ("2026-10-01", "2026-10-02", "in advance"),
     ("2026-11-01", "2027-03-01", "at most"),
 ])
 def test_bad_requests(client, fixed_today, start, end, msg):
@@ -220,3 +222,91 @@ def test_far_future_dates_still_need_working_days(client, fixed_today):
     login(client, "AB0003")
     sat = (date(2026, 10, 15) + timedelta(days=(5 - date(2026, 10, 15).weekday()) % 7)).isoformat()
     assert apply(client, sat, sat).status_code == 400
+
+
+def test_reason_is_required(client, fixed_today):
+    offshore("AB0003")
+    login(client, "AB0003")
+    for reason in ("", "  ", "x"):
+        r = apply(client, "2026-10-19", "2026-10-19", reason=reason)
+        assert r.status_code == 400 and "reason" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("loc,code", [("offshore", "sick"), ("onshore", "personal")])
+def test_sick_and_personal_can_be_backdated(client, fixed_today, loc, code):
+    if loc == "offshore":
+        offshore("AB0003")
+    else:
+        add_staff("AB0003", None)
+    login(client, "AB0003")
+    assert apply(client, "2026-10-12", "2026-10-13", code=code, reason="Flu").status_code == 200
+    assert apply(client, "2026-10-15", "2026-10-15", code=code, reason="Flu again").status_code == 200  # today
+    r = apply(client, "2026-08-10", "2026-08-10", code=code, reason="Old")
+    assert r.status_code == 400 and "60 days" in r.json()["detail"]
+
+
+@pytest.mark.parametrize("code", ["annual", "long_service", "unpaid"])
+def test_onshore_advance_only_types(client, fixed_today, code):
+    add_staff("AB0010", None)
+    login(client, "AB0010")
+    assert apply(client, "2026-10-15", "2026-10-16", code=code).status_code == 400
+    assert apply(client, "2026-10-16", "2026-10-16", code=code).status_code == 200
+
+
+# ---- attachments ----------------------------------------------------------------------
+
+PDF = b"%PDF-1.7\n%fake but has the right header\n"
+JPG = b"\xff\xd8\xff\xe0" + b"0" * 100
+HEIC = b"\x00\x00\x00\x18ftypheic" + b"0" * 50
+
+
+def upload(client, rid, data, name="cert.pdf"):
+    return client.post(f"/api/leave/requests/{rid}/attachments", content=data,
+                       headers={"x-filename": name, "content-type": "application/octet-stream"})
+
+
+def test_attach_view_and_permissions(client, fixed_today):
+    offshore("AB0003")
+    offshore("AB0006")
+    add_staff("AB0001", None, role="admin")
+    login(client, "AB0003")
+    rid = apply(client, "2026-10-12", "2026-10-12", code="sick", reason="Flu").json()["id"]
+    r = upload(client, rid, PDF, "Medical cert (Dr Smith).pdf")
+    assert r.status_code == 200 and r.json()["content_type"] == "application/pdf"
+    aid = r.json()["id"]
+    assert r.json()["filename"] == "Medical cert (Dr Smith).pdf"
+    assert upload(client, rid, JPG, "photo.jpeg").json()["filename"] == "photo.jpg"
+    assert upload(client, rid, HEIC, "IMG_1234.HEIC").json()["content_type"] == "image/heic"
+    me = client.get("/api/leave/me").json()
+    assert [a["filename"] for a in me["requests"][0]["attachments"]] == [
+        "Medical cert (Dr Smith).pdf", "photo.jpg", "IMG_1234.heic"]
+    got = client.get(f"/api/leave/attachments/{aid}")
+    assert got.status_code == 200 and got.content == PDF and got.headers["x-content-type-options"] == "nosniff"
+    assert "sandbox" in got.headers["content-security-policy"]
+    client.post("/api/auth/logout")
+    login(client, "AB0006")  # another staff member: can't see it, can't add to it
+    assert client.get(f"/api/leave/attachments/{aid}").status_code == 404
+    assert upload(client, rid, PDF).status_code == 404
+    client.post("/api/auth/logout")
+    login(client, "AB0001")  # admin: can see it, and it's on the pending card
+    assert client.get(f"/api/leave/attachments/{aid}").status_code == 200
+    [p] = client.get("/api/admin/leave").json()["pending"]
+    assert len(p["attachments"]) == 3
+
+
+def test_attachment_rules(client, fixed_today):
+    offshore("AB0003")
+    login(client, "AB0003")
+    rid = apply(client, "2026-10-19", "2026-10-19", reason="Trip").json()["id"]
+    assert upload(client, rid, b"MZ\x90\x00 not a pdf", "virus.pdf").status_code == 415  # real type checked
+    assert upload(client, rid, b"<html><script>alert(1)</script>", "x.png").status_code == 415
+    assert upload(client, rid, b"").status_code == 400
+    assert upload(client, rid, b"%PDF-" + b"0" * (10 * 1024 * 1024)).status_code == 413
+    for _ in range(5):
+        assert upload(client, rid, PDF).status_code == 200
+    assert upload(client, rid, PDF).status_code == 409  # max 5
+    # can remove while pending; not after approval/cancel
+    aid = client.get("/api/leave/me").json()["requests"][0]["attachments"][0]["id"]
+    assert client.delete(f"/api/leave/attachments/{aid}").status_code == 200
+    client.post(f"/api/leave/requests/{rid}/cancel")
+    assert upload(client, rid, PDF).status_code == 409
