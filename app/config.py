@@ -41,6 +41,10 @@ class Settings(BaseSettings):
     # Kiosk locations offered at setup: "Name:onshore|offshore", comma-separated.
     kiosk_locations: str = "AB HQ:onshore,WrkPod:offshore"
 
+    # Off-server backup copies (Google Shared Drive folder or drive ID); empty = off
+    backup_drive_folder_id: str = ""
+    backup_drive_keep_days: int = 90
+
     # Roster source
     roster_source: Literal["google", "csv"] = "google"
     roster_sheet_id: str = ""

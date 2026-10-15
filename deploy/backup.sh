@@ -31,3 +31,19 @@ mv "$file.tmp" "$file"
 chmod 600 "$file"
 find "$BACKUP_DIR" -name 'roster-*.sql.gz' -mtime +"$KEEP_DAYS" -delete
 echo "$(date '+%F %T') backup OK: $file ($(du -h "$file" | cut -f1))"
+
+# Off-server copy: encrypt with the passphrase, upload to the Google Shared Drive.
+PASSFILE="${BACKUP_PASSPHRASE_FILE:-$APP_DIR/secrets/backup-passphrase}"
+if [ -s "$PASSFILE" ] && grep -q '^BACKUP_DRIVE_FOLDER_ID=..*' "$APP_DIR/.env" 2>/dev/null; then
+  name="$(basename "$file").gpg"
+  if gpg --batch --yes --quiet --pinentry-mode loopback --passphrase-file "$PASSFILE" \
+        --symmetric --cipher-algo AES256 --output - "$file" \
+      | docker compose exec -T roster-app python -m app.offsite upload "$name"; then
+    echo "$(date '+%F %T') offsite copy OK"
+  else
+    echo "$(date '+%F %T') OFFSITE FAILED — local backup is still in $BACKUP_DIR" >&2
+    exit 2
+  fi
+else
+  echo "$(date '+%F %T') note: off-server copy not set up (see README → Backups)"
+fi

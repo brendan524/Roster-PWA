@@ -139,6 +139,18 @@ crontab -l                               # confirm the line is there
 
 Check it's running: `tail /root/backups/ab-roster/backup.log`. Backups on the same server don't survive the server being lost, so also turn on Hostinger's VPS backups or snapshots, or copy the folder off-site.
 
+**Off-server copy (Google Shared Drive).** Each night's backup is also **encrypted** (AES-256, with a passphrase only you hold) and uploaded to a Shared drive. Copies are kept for 90 days, and the newest 7 are always kept. To set it up:
+1. In Google Drive, go to **Shared drives → New**, e.g. "AB Roster Backups". Open **Manage members** and add `ab-roster-reader@ab-roster.iam.gserviceaccount.com` as **Content manager**.
+2. Copy the drive ID from its URL (`https://drive.google.com/drive/folders/<ID>`) and add `BACKUP_DRIVE_FOLDER_ID=<ID>` to `.env`.
+3. Create the passphrase: `openssl rand -base64 32 > secrets/backup-passphrase && chmod 600 secrets/backup-passphrase`. **Save it in Passbolt.** Without it the Drive copies can't be opened.
+4. Run `docker compose up -d --build`, then `docker compose exec roster-app python -m app.offsite check`, then `./deploy/backup.sh`. You should see `offsite copy OK`.
+
+**Restore from a Drive copy**: download the `.gpg` file to the VPS, then decrypt it:
+```bash
+gpg --batch --pinentry-mode loopback --passphrase-file secrets/backup-passphrase -d roster-….sql.gz.gpg > restore.sql.gz
+```
+Then restore `restore.sql.gz` as below.
+
 **Restore** (replaces the current data with the backup):
 ```bash
 cd ~/ab-roster
