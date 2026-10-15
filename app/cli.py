@@ -41,7 +41,11 @@ def _norm(h: str) -> str:
 
 def seed_staff(path: str) -> int:
     with open(path, newline="", encoding="utf-8-sig") as fh:
-        reader = csv.DictReader(fh)
+        first = fh.readline()
+        fh.seek(0)
+        # Rows copied straight out of a spreadsheet are tab-separated.
+        delimiter = "\t" if first.count("\t") > first.count(",") else ","
+        reader = csv.DictReader(fh, delimiter=delimiter)
         reader.fieldnames = [_norm(h) for h in reader.fieldnames or []]
         missing = [c for c in REQUIRED_COLUMNS if c not in reader.fieldnames]
         if missing:

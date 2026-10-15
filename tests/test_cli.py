@@ -103,3 +103,12 @@ def test_row_with_unquoted_comma_is_rejected(tmp_path, capsys):
                  "AB0016,Jody Wilms,Onshore,First Aid instructor (public bookings, AB HQ)\n")
     assert seed_staff(str(p)) == 1
     assert "more columns than the header" in capsys.readouterr().err
+
+
+def test_tab_separated_paste_from_a_spreadsheet(tmp_path):
+    p = tmp_path / "s.csv"
+    p.write_text("Staff ID\tName\tLocation Type\tNotes\n"
+                 "AB0016\tJody Wilms\tOnshore\tFirst Aid instructor (public bookings, AB HQ)\n")
+    assert seed_staff(str(p)) == 0
+    with SessionLocal() as db:
+        assert db.get(Staff, "AB0016").notes == "First Aid instructor (public bookings, AB HQ)"
