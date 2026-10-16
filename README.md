@@ -167,8 +167,8 @@ quantity for each Xero pay item — no dollar amounts — plus anything to check
 Travel (First Aid, trainers with "First Aid travel paid" ticked under Team → Staff — Judy and Jody): per day,
 HQ → each client site in order → HQ, benchmarked from `OFFICE_ADDRESS` (Unit 2, 7-9 Butler Way, Tullamarine VIC
 3043), whatever route they actually drove. Travel hours to 2 decimals go into Non-Teaching Duties; km (0.1) into
-Vehicle Allowance. Locations matching `CAMPUS_PATTERNS` (Tullamarine, Butler Way, HQ, Melton, Galactic, 39 Collins,
-Norton Drive) are campuses automatically: gear is kept there, no travel.
+Vehicle Allowance. Locations matching `CAMPUS_PATTERNS` (Tullamarine, Butler Way, HQ, Melton, Galactic,
+39 Collins) are campuses automatically: gear is kept there, no travel.
 
 Set the office address (`OFFICE_ADDRESS`) and, under Clock → Pay report → First Aid venues, mark each other roster
 Location as a campus or a client site (with its address and one-way km/minutes, or let Google Maps look them up
