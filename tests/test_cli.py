@@ -166,3 +166,31 @@ def test_pin_and_password_resets_via_app(client, source):
         s = db.get(Staff, "AB0010")
         assert verify_password(s.password_hash, r["password"]) and s.must_change_password
     assert client.post("/api/admin/staff/AB0001/reset-password").status_code == 400  # not your own
+
+
+def test_choose_own_pin(client, source, monkeypatch):
+    from app.config import get_settings
+    from app.models import EmailOutbox
+    from app.security import hash_pin
+    from tests.conftest import PASSWORD, add_staff, login
+    s = get_settings()
+    for k, v in (("smtp_user", "hr@x.au"), ("smtp_password", "p"), ("alert_email", "brendan@x.au")):
+        monkeypatch.setattr(s, k, v)
+    add_staff("AB0010", None)
+    for i, sid in enumerate(("AB0011", "AB0012", "AB0013")):
+        add_staff(sid, None, pin=f"58204{i}")
+    login(client, "AB0010")
+    post = lambda pin, pw=PASSWORD: client.post("/api/auth/pin", json={"pin": pin, "password": pw})  # noqa: E731
+    assert post("482913", "wrong").status_code == 400
+    for weak in ("123456", "111111", "654321", "123123", "121212", "12345"):
+        assert post(weak).status_code == 400, weak
+    r = post("582040")
+    assert r.status_code == 409 and r.json()["detail"] == "You can't use this PIN — please choose another."
+    assert post("482913").status_code == 200
+    with SessionLocal() as db:
+        assert db.get(Staff, "AB0010").pin_hash == hash_pin("482913")
+    assert post("582041").status_code == 409
+    assert post("582042").status_code == 409  # third clash today → paused, admin alerted
+    assert post("739164").status_code == 429
+    with SessionLocal() as db:
+        assert db.query(EmailOutbox).filter(EmailOutbox.subject.contains("PIN changes blocked")).count() == 1

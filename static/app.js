@@ -182,22 +182,42 @@ function renderChangePassword(voluntary = false) {
 
 function pinCard() {
   const err = h("p", { class: "form-error", hidden: true, role: "alert" });
+  const digits = { type: "password", inputmode: "numeric", pattern: "[0-9]*", maxlength: "6", autocomplete: "off" };
+  const pin1 = h("input", { ...digits, id: "pin-new" });
+  const pin2 = h("input", { ...digits, id: "pin-again" });
   const pw = h("input", { type: "password", id: "pin-pw", autocomplete: "current-password" });
-  const btn = h("button", { class: "btn secondary", type: "submit" }, "Get a new PIN");
+  const save = h("button", { class: "btn", type: "submit" }, "Save my PIN");
+  const fail = (msg) => { err.textContent = msg; err.hidden = false; };
   const shown = state.newPin ? h("div", { class: "new-secret", role: "status" },
     h("div", { class: "meta" }, "Your new clock-in PIN"), h("div", { class: "secret" }, state.newPin),
     h("div", { class: "meta" }, "Remember it — it won't be shown again. Your old PIN no longer works.")) : null;
-  return h("form", { class: "card account", style: "margin-top:14px", onsubmit: async (e) => {
-    e.preventDefault(); err.hidden = true; btn.disabled = true;
+  const random = h("button", { class: "link-btn dark", type: "button", onclick: async () => {
+    err.hidden = true;
+    if (!pw.value) { fail("Type your password first."); pw.focus(); return; }
+    random.disabled = true;
     try {
       const r = await api("/api/auth/new-pin", { method: "POST", body: { password: pw.value } });
       state.newPin = r.pin; state.accountMsg = null; renderAccount(); state.newPin = null;
-    } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
+    } catch (ex) { fail(ex.message); random.disabled = false; }
+  } }, "Or let the app pick one for me");
+  return h("form", { class: "card account", style: "margin-top:14px", onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true;
+    if (!/^[0-9]{6}$/.test(pin1.value)) return fail("Your PIN must be exactly 6 digits.");
+    if (pin1.value !== pin2.value) return fail("The two PINs don't match.");
+    if (!pw.value) return fail("Type your password to confirm.");
+    save.disabled = true;
+    try {
+      await api("/api/auth/pin", { method: "POST", body: { pin: pin1.value, password: pw.value } });
+      state.accountMsg = "PIN saved. Use it next time you clock in."; renderAccount();
+    } catch (ex) { fail(ex.message); save.disabled = false; if (ex.status === 409) { pin1.value = ""; pin2.value = ""; pin1.focus(); } }
   } },
     h("b", {}, "Clock-in PIN"),
-    h("p", { class: "hint" }, "Forgotten your PIN? Get a new one here. The app chooses it for you."),
+    h("p", { class: "hint" }, "Choose a new 6-digit PIN. Avoid easy ones like 123456 or your birthday."),
     shown,
-    h("label", { for: "pin-pw" }, "Your password (to confirm)"), pw, err, btn);
+    h("label", { for: "pin-new" }, "New PIN"), pin1,
+    h("label", { for: "pin-again" }, "New PIN again"), pin2,
+    h("label", { for: "pin-pw" }, "Your password (to confirm)"), pw,
+    err, save, random);
 }
 
 function renderAccount() {

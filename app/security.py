@@ -69,8 +69,10 @@ def validate_pin(pin: str) -> str | None:
     length = get_settings().pin_length
     if not (pin.isdigit() and len(pin) == length):
         return f"PIN must be exactly {length} digits."
-    if len(set(pin)) == 1 or pin in "0123456789" or pin in "9876543210":
-        return "PIN is too easy to guess."
+    half = len(pin) // 2
+    if (len(set(pin)) == 1 or pin in "0123456789" or pin in "9876543210"
+            or pin[:half] == pin[half:] or len(set(pin[0::2])) == len(set(pin[1::2])) == 1):  # 123123, 121212
+        return "That PIN is too easy to guess — please choose another."
     return None
 
 
