@@ -1370,11 +1370,13 @@ function venuesPanel() {
   return [h("h2", { class: "month-title" }, `First Aid venues${unknown ? ` (${unknown} to set up)` : ""}`),
     h("p", { class: "hint" }, "Campus = gear kept there, no travel paid. Client site = travel time and km paid from the office"
       + (V.office_address ? ` (${V.office_address}).` : " — set OFFICE_ADDRESS on the server first.")
-      + (V.maps ? " Distances are looked up on Google Maps." : " Type the one-way km and minutes from the office.")),
+      + (V.maps ? " Distances are looked up on Google Maps — type the address, or the business name and suburb." : " Type the one-way km and minutes from the office.")),
     V.venues.map((v) => {
       const kind = h("select", { "aria-label": `${v.label} type` },
         [["unknown", "Not set"], ["campus", "Campus"], ["client", "Client site"]].map(([k, l]) => h("option", { value: k, selected: v.kind === k }, l)));
-      const addr = h("input", { type: "text", value: v.address, placeholder: "Street address (for client sites)", "aria-label": `${v.label} address` });
+      const addr = h("input", { type: "text", value: v.address, placeholder: "Address, or business name + suburb", "aria-label": `${v.label} address` });
+      const mapLink = v.address ? h("a", { class: "meta", target: "_blank", rel: "noopener",
+        href: `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(v.address)}` }, "Check on map ↗") : null;
       const km = h("input", { type: "text", inputmode: "decimal", value: v.km ?? "", placeholder: "km", "aria-label": `${v.label} km one way` });
       const mins = h("input", { type: "text", inputmode: "numeric", value: v.minutes ?? "", placeholder: "min", "aria-label": `${v.label} minutes one way` });
       const save = h("button", { class: "btn small", onclick: async () => {
@@ -1388,7 +1390,9 @@ function venuesPanel() {
       } }, "Save");
       return h("div", { class: "card venue" },
         h("b", {}, v.label), kind, addr,
-        V.maps ? (v.km != null ? h("div", { class: "meta" }, `${v.km} km, ${Math.round(v.minutes)} min each way from the office`) : null)
+        mapLink,
+        V.maps ? (v.km != null ? h("div", { class: "meta" }, `${v.km} km, ${Math.round(v.minutes)} min each way from the office`)
+          : (v.kind === "client" && v.address ? h("div", { class: "pay-flags" }, "Google couldn't find a route — check the address or add the suburb") : null))
           : h("div", { class: "venue-km" }, km, mins, h("span", { class: "meta" }, "one way")),
         save);
     })];
