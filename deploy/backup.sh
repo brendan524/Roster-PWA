@@ -29,8 +29,9 @@ trap 'alert "Backup FAILED" "The nightly database backup failed at line $LINENO 
 file="$BACKUP_DIR/roster-$(date +%Y-%m-%d-%H%M).sql.gz"
 docker compose exec -T roster-db pg_dump -U roster --clean --if-exists roster | gzip > "$file.tmp"
 
-# Sanity check: a real dump contains the staff table.
-if ! gunzip -c "$file.tmp" | grep -q "CREATE TABLE public.staff"; then
+# Sanity check: a real dump contains the staff table. (grep -c reads to the end: with grep -q, a big
+# dump makes gunzip fail with "broken pipe" once grep stops early, which pipefail counts as a failure.)
+if ! gunzip -c "$file.tmp" | grep -c "CREATE TABLE public.staff" >/dev/null; then
   echo "$(date '+%F %T') BACKUP FAILED: dump looks empty or incomplete" >&2
   rm -f "$file.tmp"
   alert "Backup FAILED" "The nightly database dump looked empty or incomplete, so it wasn't kept."
