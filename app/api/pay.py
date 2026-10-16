@@ -71,9 +71,15 @@ def pay_report(end: date | None = None, _: Staff = Depends(admin_staff), db: Ses
 @router.post("/pay/email")
 def email_now(end: date, _: Staff = Depends(admin_staff), db: Session = Depends(get_db),
               service: RosterService = Depends(get_roster_service)):
+    if not mailer.configured():
+        raise HTTPException(400, "Email isn't set up on the server (SMTP_USER / SMTP_PASSWORD in .env).")
+    s = get_settings()
+    if not (s.pay_report_email or s.alert_email):
+        raise HTTPException(400, "No one to send it to: add PAY_REPORT_EMAIL (or ALERT_EMAIL) to .env, "
+                                 "then run docker compose up -d.")
     rep = _build(db, service, payreport.period_for(end)[1])
     if not send(db, rep):
-        raise HTTPException(400, "Email isn't set up, or no PAY_REPORT_EMAIL / ALERT_EMAIL.")
+        raise HTTPException(500, "Couldn't queue the email — try again.")
     db.commit()
     return {"ok": True}
 
