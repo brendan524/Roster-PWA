@@ -31,6 +31,11 @@ const state = {
   clockView: "day",   // day | pay (admin Clock tab)
   pay: null,          // /api/admin/pay
   venues: null,       // /api/admin/venues
+  expenses: null,     // /api/expenses/me
+  expensesAdmin: null, // /api/admin/expenses
+  expenseFormOpen: false,
+  expenseMsg: null,
+  leaveView: "leave", // leave | expenses (admin Leave tab)
   avail: null,        // /api/availability/me
   availDateOpen: false,
   availMsg: null,
@@ -273,11 +278,12 @@ function renderTabbar() {
     "aria-current": state.tab === id ? "page" : false,
     onclick: () => { state.tab = id; route(); },
   }, label, extra);
-  const pendingLeave = state.leaveAdmin ? state.leaveAdmin.pending.length : 0;
+  const pendingLeave = (state.leaveAdmin ? state.leaveAdmin.pending.length : 0)
+    + (state.expensesAdmin && state.expensesAdmin.can_approve ? state.expensesAdmin.pending.length : 0);
   if (state.me.role !== "admin") {
     // Contractors take no leave, so they only have their shifts (no tab bar needed).
-    if (state.me.has_leave === false) { tabbar.hidden = true; return; }
-    tabbar.replaceChildren(tab("mine", "My shifts"), tab("leave", "Leave"));
+    if (state.me.has_leave === false) { tabbar.replaceChildren(tab("mine", "My shifts"), tab("expenses", "Expenses")); return; }
+    tabbar.replaceChildren(tab("mine", "My shifts"), tab("leave", "Leave"), tab("expenses", "Expenses"));
     return;
   }
   tabbar.replaceChildren(
@@ -958,11 +964,11 @@ function previewDays(start, end, sh, eh) {
 
 const MAX_FILE_MB = 10;
 
-async function uploadFile(requestId, file) {
+async function uploadFile(requestId, file, base = "/api/leave/requests") {
   if (file.size > MAX_FILE_MB * 1024 * 1024) throw new Error(`${file.name} is over ${MAX_FILE_MB} MB.`);
   let res;
   try {
-    res = await fetch(`/api/leave/requests/${requestId}/attachments`, {
+    res = await fetch(`${base}/${requestId}/attachments`, {
       method: "POST", credentials: "same-origin", body: file,
       headers: { "x-ab-app": "1", "x-filename": encodeURIComponent(file.name), "content-type": "application/octet-stream" },
     });
@@ -998,6 +1004,140 @@ function addFileButton(r) {
     await loadLeave(); renderLeave();
   });
   return h("span", {}, input, h("button", { class: "link-btn dark", onclick: () => input.click() }, "Add a file"));
+}
+
+// ---------- expenses ----------
+
+async function loadExpenses() {
+  const isAdmin = state.me.role === "admin";
+  const [mine, admin] = await Promise.all([api("/api/expenses/me"), isAdmin ? api("/api/admin/expenses") : null]);
+  state.expenses = mine;
+  state.expensesAdmin = admin;
+}
+
+function leaveSwitch() {
+  const pend = state.expensesAdmin && state.expensesAdmin.can_approve ? state.expensesAdmin.pending.length : 0;
+  return h("div", { class: "segmented", role: "group", "aria-label": "Show" },
+    [["leave", "Leave", 0], ["expenses", "Expenses", pend]].map(([v, label, n]) => h("button", {
+      "aria-pressed": state.leaveView === v ? "true" : "false",
+      onclick: () => { state.leaveView = v; route(); },
+    }, label, n ? h("span", { class: "badge" }, n) : null)));
+}
+
+function receiptList(c, canRemove) {
+  if (!c.attachments.length) return h("div", { class: "pay-flags" }, "No receipt attached yet");
+  return h("ul", { class: "files" }, c.attachments.map((a) => h("li", {},
+    h("a", { href: `/api/expenses/attachments/${a.id}`, target: "_blank", rel: "noopener" }, `🧾 ${a.filename}`),
+    h("span", { class: "meta" }, ` ${fmtSize(a.size)}`),
+    canRemove ? h("button", { class: "link-btn dark small", onclick: async () => {
+      if (!confirm(`Remove ${a.filename}?`)) return;
+      try { await api(`/api/expenses/attachments/${a.id}`, { method: "DELETE" }); await loadExpenses(); renderExpenses(); }
+      catch (ex) { alert(ex.message); }
+    } }, "Remove") : null)));
+}
+
+function claimCard(c, { admin = false } = {}) {
+  const E = state.expensesAdmin;
+  const mine = c.staff_id === state.me.staff_id;
+  const addInput = h("input", { type: "file", accept: "application/pdf,image/*", multiple: true, hidden: true });
+  addInput.addEventListener("change", async () => {
+    const errors = [];
+    for (const f of addInput.files) { try { await uploadFile(c.id, f, "/api/expenses"); } catch (ex) { errors.push(ex.message); } }
+    if (errors.length) alert(errors.join("\n"));
+    await loadExpenses(); renderExpenses();
+  });
+  let decide = null;
+  if (admin && c.status === "pending" && E && E.can_approve && !mine) {
+    const note = h("input", { type: "text", maxlength: "500", placeholder: "Note (needed if declining)", "aria-label": "Note" });
+    const go = (decision) => async () => {
+      try { await api(`/api/admin/expenses/${c.id}/decide`, { method: "POST", body: { decision, note: note.value } });
+        await loadExpenses(); renderTabbar(); renderExpenses(); }
+      catch (ex) { alert(ex.message); }
+    };
+    decide = h("div", { class: "decide" }, note, h("div", { class: "decide-btns" },
+      h("button", { class: "btn small approve", onclick: go("approve") }, "Approve"),
+      h("button", { class: "btn small decline", onclick: go("decline") }, "Decline")));
+  }
+  return h("article", { class: `leave-req st-${c.status}` },
+    h("div", { class: "row1" }, h("b", {}, admin ? c.name : c.amount_text),
+      h("span", { class: `pill ${c.status}` }, STATUS_LABEL[c.status] || c.status)),
+    admin ? h("div", {}, h("b", {}, c.amount_text)) : null,
+    h("div", { class: "meta" }, `${c.category_label} · ${fmtDay(c.expense_date)}`),
+    h("div", {}, `“${c.description}”`),
+    receiptList(c, mine && c.status === "pending"),
+    mine && c.status === "pending" ? h("div", { class: "decide-btns" },
+      h("span", {}, addInput, h("button", { class: "link-btn dark", onclick: () => addInput.click() }, "Add receipt")),
+      h("button", { class: "link-btn dark", onclick: async () => {
+        if (!confirm("Cancel this claim?")) return;
+        try { await api(`/api/expenses/${c.id}/cancel`, { method: "POST" }); await loadExpenses(); renderExpenses(); }
+        catch (ex) { alert(ex.message); }
+      } }, "Cancel claim")) : null,
+    c.status === "approved" ? h("div", { class: "pay-leave" }, c.paid_in_period ? `Paid with the pay run ending ${fmtDay(c.paid_in_period)}` : "Will be paid with the next pay run") : null,
+    c.decision_note ? h("div", { class: "meta" }, `Note from ${c.decided_by}: ${c.decision_note}`) : null,
+    decide,
+  );
+}
+
+function expenseForm(X) {
+  const err = h("p", { class: "form-error", hidden: true, role: "alert" });
+  const dt = h("input", { type: "date", id: "xd", max: X.today, min: shiftDays(X.today, -X.max_age_days), value: X.today });
+  const cat = h("select", { id: "xc" }, h("option", { value: "" }, "Choose…"), X.categories.map((c) => h("option", { value: c.code }, c.label)));
+  const amt = h("input", { type: "text", id: "xa", inputmode: "decimal", placeholder: X.currency === "PHP" ? "₱ 0.00" : "$ 0.00" });
+  const desc = h("input", { type: "text", id: "xdesc", maxlength: "500", placeholder: "e.g. parking at Acme for CPR course" });
+  const files = h("input", { type: "file", id: "xf", accept: "application/pdf,image/*", multiple: true });
+  const btn = h("button", { class: "btn", type: "submit" }, "Submit claim");
+  const fail = (m) => { err.textContent = m; err.hidden = false; };
+  return h("form", { class: "card leave-form", onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true;
+    const amount = Number(String(amt.value).replace(/[$₱,\s]/g, ""));
+    if (!cat.value) return fail("Choose a category.");
+    if (!(amount > 0)) return fail("Enter the amount.");
+    if (desc.value.trim().length < 3) return fail("Please say what it was for.");
+    if (!files.files.length) return fail("Please attach a photo or PDF of the receipt.");
+    const big = [...files.files].find((f) => f.size > MAX_FILE_MB * 1024 * 1024);
+    if (big) return fail(`${big.name} is over ${MAX_FILE_MB} MB.`);
+    btn.disabled = true;
+    try {
+      const c = await api("/api/expenses", { method: "POST", body: { expense_date: dt.value, category: cat.value, amount: amount.toFixed(2), description: desc.value } });
+      const errors = [];
+      for (const f of files.files) { try { await uploadFile(c.id, f, "/api/expenses"); } catch (ex) { errors.push(ex.message); } }
+      state.expenseFormOpen = false;
+      state.expenseMsg = errors.length ? `Claim sent, but some files didn't upload: ${errors.join("; ")}. Use "Add receipt" on the claim.` : "Claim sent to Brendan.";
+      await loadExpenses(); renderExpenses();
+    } catch (ex) { fail(ex.message); btn.disabled = false; }
+  } },
+    h("label", { for: "xd" }, "Date of the expense"), dt,
+    h("label", { for: "xc" }, "Category"), cat,
+    h("label", { for: "xa" }, `Amount (${X.currency}, incl. GST)`), amt,
+    h("label", { for: "xdesc" }, "What was it for?"), desc,
+    h("label", { for: "xf" }, "Receipt (photo or PDF)"), files,
+    h("p", { class: "hint" }, `Within ${X.max_age_days} days of the expense. Up to 10 MB per file.`),
+    err, btn,
+    h("button", { class: "link-btn dark", type: "button", onclick: () => { state.expenseFormOpen = false; renderExpenses(); } }, "Cancel"));
+}
+
+function renderExpenses() {
+  const X = state.expenses;
+  const E = state.expensesAdmin;
+  banner.hidden = true;
+  renderTabbar();
+  const current = X.claims.filter((c) => c.status === "pending" || (c.status === "approved" && !c.paid_in_period));
+  const past = X.claims.filter((c) => !current.includes(c));
+  render(
+    state.me.role === "admin" ? leaveSwitch() : null,
+    h("div", { class: "page-head" }, h("h1", {}, "Expenses"),
+      h("div", { class: "updated" }, h("button", { class: "icon-btn", onclick: async () => { await loadExpenses(); renderExpenses(); } }, "Refresh"))),
+    E && E.pending.length ? [h("h2", { class: "month-title" }, E.can_approve ? `Waiting for your approval (${E.pending.length})` : `Waiting for ${E.approver_names.join(", ")} (${E.pending.length})`),
+      ...E.pending.map((c) => claimCard(c, { admin: true }))] : null,
+    E ? h("h2", { class: "month-title" }, "My claims") : null,
+    state.expenseMsg ? h("p", { class: "clock-msg ok", role: "status" }, state.expenseMsg) : null,
+    state.expenseFormOpen ? expenseForm(X)
+      : h("button", { class: "btn", onclick: () => { state.expenseFormOpen = true; state.expenseMsg = null; renderExpenses(); } }, "New expense claim"),
+    current.length ? [h("h2", { class: "month-title" }, "Current"), ...current.map((c) => claimCard(c))] : null,
+    past.length ? [h("h2", { class: "month-title" }, "Past"), ...past.slice(0, 15).map((c) => claimCard(c))] : null,
+    !X.claims.length && !state.expenseFormOpen ? h("p", { class: "hint" }, "Spent your own money on work things (parking, tolls, supplies)? Claim it here with a photo of the receipt.") : null,
+    E && E.recent.length ? [h("h2", { class: "month-title" }, "Recent decisions"), ...E.recent.slice(0, 15).map((c) => claimCard(c, { admin: true }))] : null,
+  );
 }
 
 const STATUS_LABEL = { pending: "Waiting for approval", approved: "Approved", declined: "Declined", cancelled: "Cancelled" };
@@ -1141,6 +1281,7 @@ function renderLeave() {
   else balanceBlock = h("p", { class: "hint" }, "Your leave balances are kept in Xero. Ask Brendan or Aaron for your current balance.");
 
   render(
+    state.me.role === "admin" ? leaveSwitch() : null,
     h("div", { class: "page-head" }, h("h1", {}, "Leave"),
       h("div", { class: "updated" }, h("button", { class: "icon-btn", onclick: async () => { await loadLeave(); renderTabbar(); renderLeave(); } }, "Refresh"))),
     A && A.pending.length ? [h("h2", { class: "month-title" }, `Waiting for your approval (${A.pending.length})`),
@@ -1289,7 +1430,7 @@ async function reloadClock() {
 
 // ---------- pay report (admin) ----------
 
-const EMP_LABEL = { casual: "Casual", "part-time": "Part-time", "full-time": "Full-time", contractor: "Contractor",
+const EMP_LABEL = { casual: "Casual", "part-time": "Part-time", "full-time": "Full-time", contractor: "Contractor", director: "Director",
   salaried: "Salaried (offshore)", unknown: "Employment type unknown" };
 
 function fmtLongDate(s) { return parseISO(s).toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", year: "numeric" }); }
@@ -1312,7 +1453,7 @@ async function renderPay(end, reload = false) {
       `${fmtDay(p.start)} – ${fmtDay(p.end)}${p.end === R.periods[0].end ? " (current)" : ""}`)));
   const checks = R.people.reduce((n, p) => n + p.flags.length, 0);
   const groups = [
-    ["Enter in Xero", (p) => ["casual", "part-time", "full-time", "unknown"].includes(p.employment)],
+    ["Enter in Xero", (p) => ["casual", "part-time", "full-time", "unknown", "director"].includes(p.employment)],
     ["Contractors — check against invoices", (p) => p.employment === "contractor"],
     ["Offshore — salaried", (p) => p.employment === "salaried"],
   ];
@@ -1322,6 +1463,7 @@ async function renderPay(end, reload = false) {
       ? h("div", { class: "meta" }, `Clocked ${p.shifts.reduce((n, s) => n + (s.clocked_hours || 0), 0)} h · rostered ${p.shifts.reduce((n, s) => n + s.rostered_hours, 0)} h`)
       : (p.items.length ? h("table", { class: "pay-items" }, p.items.map((it) => h("tr", {}, h("td", {}, it.item), h("td", {}, String(it.qty)))))
         : h("div", { class: "meta" }, "Nothing to pay this period")),
+    (p.expenses || []).map((x) => h("div", { class: "pay-leave" }, `Expense: ${x}`)),
     p.leave.map((l) => h("div", { class: "pay-leave" }, `Leave: ${l}`)),
     p.flags.length ? h("ul", { class: "pay-flags" }, p.flags.map((f) => h("li", {}, f))) : null,
     p.shifts.length ? h("button", { class: "link-btn dark small", onclick: () => { open.has(p.staff_id) ? open.delete(p.staff_id) : open.add(p.staff_id); renderPay(); } },
@@ -1456,8 +1598,15 @@ async function route() {
       if (!state.roster) { render(h("p", { class: "loading" }, "Loading your shifts…")); await loadMine(); }
       renderMine();
     } else if (state.tab === "leave") {
+      if (state.me.role === "admin" && state.leaveView === "expenses") {
+        if (!state.expenses) { render(h("p", { class: "loading" }, "Loading expenses…")); await loadExpenses(); }
+        return renderExpenses();
+      }
       if (!state.leave) { render(h("p", { class: "loading" }, "Loading leave…")); await loadLeave(); }
       renderLeave();
+    } else if (state.tab === "expenses") {
+      if (!state.expenses) { render(h("p", { class: "loading" }, "Loading expenses…")); await loadExpenses(); }
+      renderExpenses();
     } else if (state.tab === "account") {
       renderAccount();
     } else if (state.tab === "clock") {
@@ -1483,6 +1632,7 @@ async function start() {
   state.leave = null; state.leaveAdmin = null; state.leaveFormOpen = false; state.leaveMsg = null;
   state.avail = null; state.adminAvail = null; state.availDateOpen = false; state.availMsg = null; state.availAllClashes = false;
   state.staffList = null; state.staffReveal = null; state.newPin = null; state.pay = null; state.venues = null;
+  state.expenses = null; state.expensesAdmin = null; state.expenseFormOpen = false; state.expenseMsg = null; state.leaveView = "leave";
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
   if (xeroReturn && state.me.role === "admin") {
@@ -1495,6 +1645,7 @@ async function start() {
   if (state.me.role === "admin") {
     loadAdmin().then(renderTabbar).catch(() => {});
     api("/api/admin/leave").then((d) => { state.leaveAdmin = d; renderTabbar(); }).catch(() => {});
+    api("/api/admin/expenses").then((d) => { state.expensesAdmin = d; renderTabbar(); }).catch(() => {});
   }
 }
 

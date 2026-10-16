@@ -59,6 +59,7 @@ class Settings(BaseSettings):
     smtp_password: str = ""
     mail_from: str = ""  # defaults to smtp_user
     alert_email: str = ""  # system alerts (backups, Xero, roster sheet)
+    expense_approvers: str = "AB0001"  # Staff IDs who can approve expense claims (and get the emails)
     availability_email: str = ""  # whoever builds the roster (Dan): staff availability as it comes in
     app_url: str = ""  # e.g. https://hr.abgroup.au, for links in emails
     digest_hour: int = 7  # daily admin digest, local time; -1 = off

@@ -35,7 +35,7 @@ from sqlalchemy.orm import Session
 from app import holidays, travel
 from app.config import get_settings
 from app.leave import count_days, label_for
-from app.models import LeaveRequest, PayReport, Punch, Staff, XeroEmployeeLink
+from app.models import ExpenseClaim, LeaveRequest, PayReport, Punch, Staff, XeroEmployeeLink
 from app.punches import analyse, effective_punches, local_day_bounds, pair_sessions, shift_bounds
 from app.roster import RosterService, Shift
 
@@ -50,6 +50,7 @@ MILESTONE = 800
 CASUAL_HOURS, ORDINARY_HOURS, PH_HOURS, OVERTIME = "Casual Ordinary Hours", "Ordinary Hours", "Public Holiday Hours", "Overtime"
 TEACHING, NON_TEACHING, VEHICLE = "Sessional Teaching", "Non-Teaching Duties", "Vehicle Allowance (cents per KM)"
 FIRST_AID_ALLOW, LAUNDRY, BROKEN, FARES = "First Aid Allowance", "Laundry Allowance", "Broken Shift Allowance", "Excess Fares Allowance"
+REIMBURSE = "Reimbursement"
 
 
 # ---- periods -----------------------------------------------------------------------
@@ -116,6 +117,8 @@ class Person:
     flags: list[str] = field(default_factory=list)
     leave: list[str] = field(default_factory=list)
     teaching_delivered: float = 0.0  # for the 800-hour tracker (uncapped, courses actually worked)
+    expenses: list[str] = field(default_factory=list)
+    expense_ids: list[int] = field(default_factory=list)
 
     def add(self, item: str, qty: float) -> None:
         if qty:
@@ -125,6 +128,7 @@ class Person:
         return {"staff_id": self.staff_id, "name": self.name, "employment": self.employment,
                 "teams": sorted(self.teams), "items": [{"item": k, "qty": v} for k, v in self.items.items()],
                 "shifts": self.shifts, "flags": self.flags, "leave": self.leave,
+                "expenses": self.expenses, "expense_ids": self.expense_ids,
                 "teaching_delivered": round(self.teaching_delivered, 2)}
 
 
@@ -350,6 +354,19 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
         pr.add(FIRST_AID_ALLOW, len(weeks))
         pr.add(LAUNDRY, len(weeks))
 
+    # Approved expense claims not yet paid (or paid in this period): reimbursed with this pay.
+    for c in db.query(ExpenseClaim).filter(ExpenseClaim.status == "approved",
+                                           (ExpenseClaim.paid_in_period.is_(None)) | (ExpenseClaim.paid_in_period == end)):
+        st = staff.get(c.staff_id)
+        if st is None or (c.paid_in_period is None and c.decided_at and c.decided_at.astimezone(tz).date() > end + timedelta(days=1)):
+            continue  # approved after this report was due: goes in the next one
+        pr = person(c.staff_id, st.name)
+        item = REIMBURSE if c.currency == "AUD" else f"{REIMBURSE} ({c.currency})"
+        pr.add(item, float(c.amount))
+        pr.expense_ids.append(c.id)
+        sym = "₱" if c.currency == "PHP" else "$"
+        pr.expenses.append(f"{c.expense_date:%a %-d %b}: {sym}{float(c.amount):,.2f} — {c.description}")
+
     # Approved leave in the period
     for r in db.query(LeaveRequest).filter(LeaveRequest.status == "approved", LeaveRequest.start_date <= end,
                                            LeaveRequest.end_date >= start):
@@ -360,20 +377,20 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
         days_n = count_days(a, b, r.start_half and a == r.start_date, r.end_half and b == r.end_date)
         if days_n <= 0:
             continue
-        pr = person(r.staff_id, st.name)
-        if pr.employment == "director":
+        if employment(st, links.get(r.staff_id)) == "director":
             continue
+        pr = person(r.staff_id, st.name)
         span = _day(a) if a == b else f"{_day(a)} – {_day(b)}"
         pr.leave.append(f"{label_for(st, r.leave_type)}: {float(days_n):g} day{'s' if days_n != 1 else ''} ({span})")
 
     for pr in people.values():
         if pr.employment == "salaried":
-            pr.items = {}
+            pr.items = {k: v for k, v in pr.items.items() if k.startswith(REIMBURSE)}
             worked = {row["date"] for row in pr.shifts if row.get("clock_in") or row.get("clock_out")}
             pr.items["Days worked"] = len(worked)
 
-    order = {"casual": 0, "part-time": 0, "full-time": 0, "unknown": 0, "contractor": 1, "salaried": 2}
-    out_people = sorted((p for p in people.values() if p.employment != "director"),
+    order = {"casual": 0, "part-time": 0, "full-time": 0, "unknown": 0, "director": 0, "contractor": 1, "salaried": 2}
+    out_people = sorted((p for p in people.values() if p.employment != "director" or p.expense_ids),
                         key=lambda p: (order.get(p.employment, 3), p.name.lower()))
     return {
         "period_start": start.isoformat(), "period_end": end.isoformat(), "pay_day": pay_day(end).isoformat(),
@@ -412,6 +429,7 @@ def teaching_tracker(db: Session, staff: dict[str, Staff], this_period: dict[str
 # ---- email ----------------------------------------------------------------------------
 
 EMPLOYMENT_LABEL = {"casual": "Casual", "part-time": "Part-time", "full-time": "Full-time", "contractor": "Contractor",
+                    "director": "Director",
                     "salaried": "Salaried (offshore)", "unknown": "Employment type unknown"}
 
 
@@ -422,7 +440,7 @@ def email_text(rep: dict) -> str:
     lines = [f"Pay report: {d(rep['period_start'])} to {d(rep['period_end'])}", f"Pay day: {d(rep['pay_day'])}", ""]
     checks = sum(len(p["flags"]) for p in rep["people"])
     lines.append(f"{checks} thing{'s' if checks != 1 else ''} to check (marked ⚠ below)." if checks else "Nothing flagged.")
-    for group, title in ((("casual", "part-time", "full-time", "unknown"), "ENTER IN XERO"),
+    for group, title in ((("casual", "part-time", "full-time", "unknown", "director"), "ENTER IN XERO"),
                          (("contractor",), "CONTRACTORS — check against their invoices"),
                          (("salaried",), "OFFSHORE — salaried")):
         ppl = [p for p in rep["people"] if p["employment"] in group]
@@ -433,6 +451,8 @@ def email_text(rep: dict) -> str:
             lines += ["", f"{p['name']} ({p['staff_id']}) · {EMPLOYMENT_LABEL.get(p['employment'], p['employment'])}"
                       + (f" · {', '.join(p['teams'])}" if p["teams"] else "")]
             if p["employment"] == "contractor":
+                for it in p["items"]:
+                    lines.append(f"  {it['item']:<34} {it['qty']:g}")
                 worked = [s for s in p["shifts"] if s.get("clocked_hours")]
                 hrs = sum(s["clocked_hours"] for s in worked)
                 rostered = sum(s["rostered_hours"] for s in p["shifts"])
@@ -442,6 +462,8 @@ def email_text(rep: dict) -> str:
                     lines.append(f"  {it['item']:<34} {it['qty']:g}")
                 if not p["items"]:
                     lines.append("  Nothing to pay this period")
+            for ex in p.get("expenses", []):
+                lines.append(f"  Expense: {ex}")
             for lv in p["leave"]:
                 lines.append(f"  Leave: {lv}")
             for f in p["flags"]:

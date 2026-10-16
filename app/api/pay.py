@@ -12,7 +12,7 @@ from app import mailer, payreport, travel
 from app.config import get_settings
 from app.db import get_db
 from app.deps import admin_staff, get_roster_service
-from app.models import PayReport, Staff, TravelLeg, Venue
+from app.models import ExpenseClaim, PayReport, Staff, TravelLeg, Venue
 from app.roster import RosterService, RosterUnavailable
 
 router = APIRouter(prefix="/api/admin", tags=["pay"])
@@ -48,6 +48,10 @@ def send(db: Session, rep: dict, now: datetime | None = None) -> bool:
                       payreport.email_text(rep))
     today = (now or datetime.now(UTC)).astimezone(ZoneInfo(s.timezone)).date()
     if end < today:  # only once the fortnight's hours are final
+        ids = [i for p in rep["people"] for i in p.get("expense_ids", [])]
+        if ids:  # these claims are paid with this pay run, so they don't appear again next fortnight
+            db.query(ExpenseClaim).filter(ExpenseClaim.id.in_(ids), ExpenseClaim.paid_in_period.is_(None)) \
+                .update({"paid_in_period": end}, synchronize_session=False)
         for t in rep.get("tracker", []):
             if t.get("reached"):
                 mailer.queue(db, to, f"Level up: {t['name']} has reached {t['reached']:,} teaching hours",

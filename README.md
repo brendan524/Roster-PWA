@@ -305,11 +305,18 @@ export PIN_PEPPER=dev COOKIE_SECURE=false ROSTER_SOURCE=csv ROSTER_CSV_DIR=./sam
 
 `static/logo.png` (header and login screen) and `static/icons/*` (home-screen icon, favicon) are generated from the AB Group logo SVG, always on black. The supplied SVG wraps a ~435 px image, so if a true vector version turns up, regenerate these from it at higher resolution. After changing any of them, bump `VERSION` in `static/sw.js` so installed apps pick up the new files.
 
+## Expenses
+
+Everyone has an **Expenses** tab (admins: Leave → Expenses): date, category (parking/tolls, accommodation &
+meals, equipment/supplies, other), amount (AUD; PHP for offshore staff), what it was for, and a photo/PDF of the
+receipt. Only the approvers in `EXPENSE_APPROVERS` (default AB0001, Brendan) can approve — and get the email for
+each claim; other admins can see them. Nobody approves their own. Approved claims appear in the next pay report as
+**Reimbursement** for that person and are marked paid once that fortnight's report goes out, so they're never
+paid twice.
+
 ## Still to do
 
 - **Onboarding new staff** — an admin screen (possibly on the kiosk) to add a new employee: details,
   Staff ID, temporary password and PIN, instead of the `seed-staff` CSV. Not needed yet.
-- **Stage 6 (optional): expenses** — claims with receipt photos; approved First Aid parking/tolls/accommodation
-  feed the pay report as reimbursements.
 - **Xero draft pay run** — once a couple of fortnights' reports have been checked by hand, push the quantities
   to Xero as timesheets / a draft pay run for approval.

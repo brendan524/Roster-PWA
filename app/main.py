@@ -8,7 +8,7 @@ from sqlalchemy import text
 
 from app import autoclock, jobs
 from app import xero as xero_sync
-from app.api import auth, availability, clock, leave, pay, roster, staff_admin, xero
+from app.api import auth, availability, clock, expenses, leave, pay, roster, staff_admin, xero
 from app.config import get_settings
 from app.db import SessionLocal, engine
 from app.deps import get_roster_service
@@ -59,6 +59,7 @@ app.include_router(xero.router)
 app.include_router(availability.router)
 app.include_router(pay.router)
 app.include_router(staff_admin.router)
+app.include_router(expenses.router)
 
 
 @app.on_event("startup")

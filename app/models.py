@@ -322,3 +322,36 @@ class PayReport(Base):
     data: Mapped[str] = mapped_column(String)  # JSON
     generated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     emailed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+
+
+class ExpenseClaim(Base):
+    """A staff expense claim with receipts. Approved claims are paid through the pay report."""
+
+    __tablename__ = "expense_claims"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.staff_id", ondelete="CASCADE"), index=True)
+    expense_date: Mapped[date] = mapped_column(Date)
+    category: Mapped[str] = mapped_column(String(20))  # parking | travel | equipment | other
+    amount: Mapped[float] = mapped_column(Numeric(10, 2))
+    currency: Mapped[str] = mapped_column(String(3))  # AUD | PHP
+    description: Mapped[str] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(10), default="pending")  # pending | approved | declined | cancelled
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    decided_by: Mapped[str | None] = mapped_column(String(32))
+    decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    decision_note: Mapped[str] = mapped_column(String(500), default="")
+    paid_in_period: Mapped[date | None] = mapped_column(Date)  # last day of the fortnight it was paid in
+
+
+class ExpenseAttachment(Base):
+    __tablename__ = "expense_attachments"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    claim_id: Mapped[int] = mapped_column(ForeignKey("expense_claims.id", ondelete="CASCADE"), index=True)
+    filename: Mapped[str] = mapped_column(String(200))
+    content_type: Mapped[str] = mapped_column(String(60))
+    size: Mapped[int] = mapped_column(Integer)
+    sha256: Mapped[str] = mapped_column(String(64))
+    data: Mapped[bytes] = mapped_column(LargeBinary)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
