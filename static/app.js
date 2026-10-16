@@ -762,6 +762,11 @@ async function renderStaffAdmin(reload = false) {
       s.pin_locked || s.login_locked ? h("div", { class: "pay-flags" }, [s.pin_locked ? "PIN locked (too many wrong tries)" : null,
         s.login_locked ? "Login locked (too many wrong passwords)" : null].filter(Boolean).join(" · ")) : null,
       !s.has_pin ? h("div", { class: "pay-flags" }, "No PIN set") : null,
+      s.location_type === "onshore" && s.role !== "admin" ? h("label", { class: "check" },
+        h("input", { type: "checkbox", checked: s.travel_eligible, onchange: async (e) => {
+          try { await api(`/api/admin/staff/${s.staff_id}/travel`, { method: "POST", body: { on: e.target.checked } }); s.travel_eligible = e.target.checked; state.pay = null; }
+          catch (ex) { alert(ex.message); e.target.checked = !e.target.checked; }
+        } }), " First Aid travel paid (time + km to client sites)") : null,
       s.availability ? h("label", { class: "inline-select" }, "Availability: ",
         h("select", { onchange: async (e) => {
           try { await api(`/api/admin/staff/${s.staff_id}/availability-mode`, { method: "POST", body: { mode: e.target.value } });
@@ -1347,7 +1352,7 @@ function teachingTracker(R) {
     h("p", { class: "hint" }, "Progression every 800 teaching hours. Totals include this period."),
     R.tracker.map((t) => h("div", { class: "tracker-row" },
       h("div", {}, h("b", {}, t.name), t.reached ? h("span", { class: "pill new" }, `Reached ${t.reached.toLocaleString()} h`) : null),
-      h("div", { class: "meta" }, `${t.total.toLocaleString()} h · next milestone ${t.next_milestone.toLocaleString()} h`),
+      h("div", { class: "meta" }, `${t.total.toLocaleString()} h · Level ${t.level} · next level at ${t.next_milestone.toLocaleString()} h`),
       h("button", { class: "link-btn dark small", onclick: async () => {
         const hrs = prompt(`${t.name}: teaching hours delivered up to the end of the last pay period before the app (e.g. 1650)`, String(t.opening || ""));
         if (hrs === null) return;

@@ -119,7 +119,7 @@ def test_public_holiday_hours(source, monkeypatch):
 
 
 def test_first_aid(source):
-    person("AB0018", "Casual")
+    person("AB0018", "Casual", travel_eligible=True)
     with SessionLocal() as db:
         db.add_all([Venue(name="tullamarine", label="Tullamarine", kind="campus"),
                     Venue(name="acme pty ltd", label="Acme Pty Ltd", kind="client", address="1 Client St, Geelong")])
@@ -147,7 +147,7 @@ def test_first_aid(source):
     p = by["AB0018"]
     it = items(p)
     assert it["Sessional Teaching"] == 5 + 5 + 4
-    assert it["Non-Teaching Duties"] == 1.0 + 0.5 + 2.0 + 0.5  # buffers + 124 min travel (→2 h)
+    assert it["Non-Teaching Duties"] == round(1.0 + 0.5 + 2.07 + 0.5, 2)  # buffers + 124 min travel (2.07 h)
     assert it["Vehicle Allowance (cents per KM)"] == 160
     assert it["First Aid Allowance"] == 2 and it["Laundry Allowance"] == 2  # two calendar weeks
     text = " | ".join(p["flags"])
@@ -201,7 +201,7 @@ def test_teaching_tracker_milestone(source):
     clock("AB0018", d, "09:00", "15:30")
     rep, _ = build()
     [t] = rep["tracker"]
-    assert t["total"] == 801 and t["reached"] == 800 and t["next_milestone"] == 1600
+    assert t["total"] == 801 and t["reached"] == 800 and t["next_milestone"] == 1600 and t["level"] == 2
     assert "reached 800 hours" in payreport.email_text(rep)
 
 
@@ -273,3 +273,43 @@ def test_queue_reports_success_and_dedupe():
             db.commit()
     finally:
         s.smtp_user, s.smtp_password = old
+
+
+def test_campus_patterns_and_travel_eligibility(source, monkeypatch):
+    monkeypatch.setattr(get_settings(), "office_address", "Unit 2, 7-9 Butler Way, Tullamarine VIC 3043")
+    person("AB0016", "Casual", travel_eligible=True)   # Jody
+    person("AB0019", "Casual")                         # another trainer: no travel paid
+    with SessionLocal() as db:
+        db.add(Venue(name="acme", label="Acme", kind="client", address="1 Client St"))
+        for a, b in (("Unit 2, 7-9 Butler Way, Tullamarine VIC 3043", "1 Client St"), ("1 Client St", "Unit 2, 7-9 Butler Way, Tullamarine VIC 3043")):
+            db.add(TravelLeg(origin=a, destination=b, km=25.25, minutes=31, source="manual"))
+        db.commit()
+    mon, tue = date(2026, 10, 5), date(2026, 10, 6)
+    FA = "First Aid"
+    roster(source,
+           (mon, "AB0016", "09:00", "12:00", FA, "Galactic Dance and Events", 2.5),
+           (mon, "AB0019", "09:00", "12:00", FA, "Tullamarine HQ", 2.5),
+           (tue, "AB0016", "09:00", "12:00", FA, "Acme", 2.5),
+           (tue, "AB0016", "13:00", "16:00", FA, "Acme", 2.5),   # same client twice: one trip
+           (tue, "AB0019", "09:00", "12:00", FA, "Acme", 2.5))
+    for sid, d, a, b in (("AB0016", mon, "09:00", "12:00"), ("AB0019", mon, "09:00", "12:00"), ("AB0016", tue, "09:00", "12:00"),
+                         ("AB0016", tue, "13:00", "16:00"), ("AB0019", tue, "09:00", "12:30")):
+        clock(sid, d, a, b)
+    _, by = build()
+    with SessionLocal() as db:
+        assert {v.label: v.kind for v in db.query(Venue)} == {"Acme": "client", "Galactic Dance and Events": "campus", "Tullamarine HQ": "campus"}
+    jody, other = items(by["AB0016"]), items(by["AB0019"])
+    assert jody["Vehicle Allowance (cents per KM)"] == 50.5 and jody["Non-Teaching Duties"] == round(1.5 + 62 / 60, 2)
+    assert jody["Sessional Teaching"] == 7.5 and "Vehicle Allowance (cents per KM)" not in other
+    assert other["Non-Teaching Duties"] == 1.0
+    assert "5 teaching hours — the full daily rate" in " | ".join(by["AB0016"]["flags"])
+    assert "clocked 30 min longer than the rostered shift" in " | ".join(by["AB0019"]["flags"])
+
+
+def test_admin_travel_toggle(client, source):
+    add_staff("AB0001", None, role="admin")
+    add_staff("AB0016", None)
+    login(client, "AB0001")
+    assert client.post("/api/admin/staff/AB0016/travel", json={"on": True}).status_code == 200
+    row = next(s for s in client.get("/api/admin/staff").json()["staff"] if s["staff_id"] == "AB0016")
+    assert row["travel_eligible"] is True

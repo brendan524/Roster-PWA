@@ -97,6 +97,7 @@ def list_staff(_: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
         "login_locked": bool(s.locked_until and s.locked_until > now),
         "must_change_password": s.must_change_password,
         "availability": s.availability_mode if av.applies_to(db, s) else None,
+        "travel_eligible": s.travel_eligible,
     } for s in sorted(db.query(Staff), key=lambda s: (not s.active, s.name.lower()))]}
 
 
@@ -125,3 +126,15 @@ def admin_reset_password(staff_id: str, admin: Staff = Depends(admin_staff), db:
     db.commit()
     delete_all_sessions(db, s.staff_id)
     return {"name": s.name, "password": pw}
+
+
+class TravelIn(BaseModel):
+    on: bool
+
+
+@router.post("/admin/staff/{staff_id}/travel")
+def set_travel(staff_id: str, body: TravelIn, _: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
+    s = _get(db, staff_id)
+    s.travel_eligible = body.on
+    db.commit()
+    return {"ok": True}

@@ -29,6 +29,7 @@ class Staff(Base):
     # Casual/contract staff: "unavailable" = tell us days/times they can't work, any time;
     # "available" = submit the days/times they CAN work for each whole month, by the 15th of the month before.
     availability_mode: Mapped[str] = mapped_column(String(12), default="unavailable")
+    travel_eligible: Mapped[bool] = mapped_column(Boolean, default=False)  # First Aid: travel time + km to client sites paid
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     password_hash: Mapped[str | None] = mapped_column(String(255))

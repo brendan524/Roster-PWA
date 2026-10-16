@@ -214,8 +214,9 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
                 pr.flags.append(f"{_day(sh.date)}: clocked in {late} min after the rostered start")
             if early_leave > TOLERANCE_MIN:
                 pr.flags.append(f"{_day(sh.date)}: clocked out {early_leave} min before the rostered end")
-            if extra > TOLERANCE_MIN:
+            if extra > 15:
                 row["notes"].append(f"{extra} min clocked outside the roster (not paid unless approved)")
+                pr.flags.append(f"{_day(sh.date)}: clocked {extra} min longer than the rostered shift")
             wd, st_t, en_t = sh.date.weekday(), time.fromisoformat(sh.start), time.fromisoformat(sh.end)
             outside = (wd == 6 or (wd < 5 and (st_t < time(7) or en_t > time(19) or sh.overnight))
                        or (wd == 5 and (st_t < time(7) or en_t > time(12, 30) or sh.overnight)))
@@ -301,26 +302,37 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
             if teach > TEACH_DAY_CAP:
                 pr.flags.append(f"{_day(d)}: {teach:g} teaching hours — capped at the 5-hour daily rate")
                 teach = TEACH_DAY_CAP
+            elif teach == TEACH_DAY_CAP:
+                pr.flags.append(f"{_day(d)}: 5 teaching hours — the full daily rate")
             pr.add(TEACHING, teach)
             pr.add(NON_TEACHING, BUFFER * len(entries))
             clients = []
+            eligible = staff[sid].travel_eligible if sid in staff else False
             for sh, _t in entries:
                 v = venues.get(travel.key(sh.location))
-                if v is None or v.kind == "unknown":
+                row = next((r for r in pr.shifts if r["date"] == d.isoformat() and r["start"] == sh.start), None)
+                if v is not None and v.kind == "campus":
+                    if row is not None:
+                        row["notes"].append("Campus — no travel")
+                elif not eligible:
+                    continue  # travel isn't paid for this trainer
+                elif v is None or v.kind == "unknown":
                     pr.flags.append(f"{_day(d)}: venue “{sh.location or '(blank)'}” isn't set as a campus or client site — "
-                                    "travel not included; set it under Pay → Venues")
-                elif v.kind == "client":
+                                    "travel not included; set it under Clock → Pay report → First Aid venues")
+                else:
                     clients.append(sh.location)
             if clients:
+                # HQ → each client site in order → HQ, benchmarked from HQ (not where they actually drove from).
                 trip = travel.day_travel(db, clients, venues, http)
                 if trip.km is None:
                     pr.flags.append(f"{_day(d)}: travel to {', '.join(clients)} not included — {trip.problem}")
                 else:
-                    pr.add(NON_TEACHING, round15(trip.minutes / 60))
-                    pr.add(VEHICLE, round(trip.km))
+                    hours, km = round(trip.minutes / 60, 2), round(trip.km, 1)
+                    pr.add(NON_TEACHING, hours)
+                    pr.add(VEHICLE, km)
                     for row in pr.shifts:
                         if row["date"] == d.isoformat():
-                            row["travel"] = {"km": round(trip.km), "hours": round15(trip.minutes / 60)}
+                            row["travel"] = {"km": km, "hours": hours}
                             break
             weeks.add(d - timedelta(days=d.weekday()))
         pr.add(FIRST_AID_ALLOW, len(weeks))
@@ -377,7 +389,7 @@ def teaching_tracker(db: Session, staff: dict[str, Staff], this_period: dict[str
         before = (st.teaching_hours_opening or 0) + saved.get(sid, 0)
         total = before + this_period.get(sid, 0)
         crossed = int(total // MILESTONE) > int(before // MILESTONE)
-        out.append({"staff_id": sid, "name": st.name, "total": round(total, 2),
+        out.append({"staff_id": sid, "name": st.name, "total": round(total, 2), "level": int(total // MILESTONE) + 1,
                     "next_milestone": (int(total // MILESTONE) + 1) * MILESTONE,
                     "reached": int(total // MILESTONE) * MILESTONE if crossed else None,
                     "opening": st.teaching_hours_opening or 0,
@@ -426,6 +438,6 @@ def email_text(rep: dict) -> str:
         lines += ["", "=" * 44, "FIRST AID TEACHING HOURS (800-hour progression)", "=" * 44]
         for t in rep["tracker"]:
             extra = f"  ★ reached {t['reached']:,} hours this period" if t["reached"] else ""
-            lines.append(f"  {t['name']:<26} {t['total']:,.1f} h (next: {t['next_milestone']:,}){extra}")
+            lines.append(f"  {t['name']:<26} {t['total']:,.1f} h · Level {t['level']} (next level at {t['next_milestone']:,} h){extra}")
     lines += ["", "Each shift's rostered and clocked times are in the app: Clock → Pay report."]
     return "\n".join(lines)

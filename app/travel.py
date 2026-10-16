@@ -27,14 +27,22 @@ def key(location: str) -> str:
     return " ".join((location or "").lower().split())
 
 
+def is_campus(label: str) -> bool:
+    text = (label or "").upper()
+    return any(p.strip() and p.strip().upper() in text for p in get_settings().campus_patterns.split(","))
+
+
 def venues_for(db: Session, locations: set[str]) -> dict[str, Venue]:
-    """Venue rows for these roster locations, adding any new ones (as 'unknown')."""
+    """Venue rows for these roster locations, adding any new ones. Names matching the campus
+    patterns (Tullamarine, Melton…) are campuses automatically; others wait for an admin."""
     rows = {v.name: v for v in db.query(Venue).filter(Venue.name.in_({key(l) for l in locations if key(l)}))}
     for loc in locations:
         k = key(loc)
         if k and k not in rows:
             rows[k] = Venue(name=k, label=loc.strip(), kind="unknown", address="")
             db.add(rows[k])
+        if k and rows[k].kind == "unknown" and is_campus(loc):
+            rows[k].kind = "campus"
     db.flush()
     return rows
 
