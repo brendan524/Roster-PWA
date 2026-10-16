@@ -313,3 +313,38 @@ def test_admin_travel_toggle(client, source):
     assert client.post("/api/admin/staff/AB0016/travel", json={"on": True}).status_code == 200
     row = next(s for s in client.get("/api/admin/staff").json()["staff"] if s["staff_id"] == "AB0016")
     assert row["travel_eligible"] is True
+
+
+def test_level_up_email_once(source, monkeypatch):
+    from app.api.pay import send
+    s = get_settings()
+    for k, v in (("smtp_user", "hr@x.au"), ("smtp_password", "p"), ("alert_email", "brendan@x.au")):
+        monkeypatch.setattr(s, k, v)
+    person("AB0018", teaching_hours_opening=1595.0, teaching_hours_as_of=date(2026, 10, 4))
+    d = date(2026, 10, 6)
+    roster(source, (d, "AB0018", "09:00", "15:30", "First Aid", "Tullamarine", 6.0))
+    clock("AB0018", d, "09:00", "15:30")
+    rep, _ = build()
+    with SessionLocal() as db:
+        send(db, rep, NOW)
+        send(db, rep, NOW)  # e.g. "Email it" pressed again: no second level-up email
+        db.commit()
+        subjects = [m.subject for m in db.query(EmailOutbox)]
+    assert subjects.count("Level up: Ab0018 has reached 1,600 teaching hours") == 1
+
+
+def test_digest_lists_new_venues(client, source, monkeypatch):
+    s = get_settings()
+    for k, v in (("smtp_user", "hr@x.au"), ("smtp_password", "p")):
+        monkeypatch.setattr(s, k, v)
+    add_staff("AB0001", "brendan@x.au", role="admin")
+    add_staff("AB0018", None)
+    t = datetime.now(MEL).date() + timedelta(days=2)
+    tabs = {m: [HEADER] for m in {f"{datetime.now(MEL).date():%Y-%m}", f"{t:%Y-%m}"}}
+    tabs[f"{t:%Y-%m}"] += [[t.isoformat(), "AB0018", "Judy", "First Aid", "CPR", "09:00", "12:00", "Acme Pty Ltd", "", "2", ""],
+                           [t.isoformat(), "AB0018", "Judy", "First Aid", "CPR", "13:00", "15:00", "Melton - Galactic", "", "2", ""]]
+    source.tabs = tabs
+    service = app.dependency_overrides[get_roster_service]()
+    with SessionLocal() as db:
+        body = jobs.build_digest(db, service, datetime.now(UTC))
+    assert "First Aid venues to set up" in body and "• Acme Pty Ltd" in body and "Galactic" not in body

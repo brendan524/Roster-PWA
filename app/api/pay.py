@@ -1,7 +1,8 @@
 """Admin: the fortnightly pay report, venues (for travel) and the teaching-hours tracker."""
 
 import json
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
@@ -39,12 +40,22 @@ def save(db: Session, rep: dict, emailed: bool) -> PayReport:
     return row
 
 
-def send(db: Session, rep: dict) -> bool:
+def send(db: Session, rep: dict, now: datetime | None = None) -> bool:
     s = get_settings()
     to = s.pay_report_email or s.alert_email
     start, end = date.fromisoformat(rep["period_start"]), date.fromisoformat(rep["period_end"])
     ok = mailer.queue(db, to, f"Pay report {start:%-d %b} – {end:%-d %b %Y} (pay day {date.fromisoformat(rep['pay_day']):%a %-d %b})",
                       payreport.email_text(rep))
+    today = (now or datetime.now(UTC)).astimezone(ZoneInfo(s.timezone)).date()
+    if end < today:  # only once the fortnight's hours are final
+        for t in rep.get("tracker", []):
+            if t.get("reached"):
+                mailer.queue(db, to, f"Level up: {t['name']} has reached {t['reached']:,} teaching hours",
+                             f"{t['name']} ({t['staff_id']}) reached {t['reached']:,} teaching hours in the fortnight "
+                             f"{start:%-d %b} – {end:%-d %b %Y} ({t['total']:,.1f} hours in total).\n\n"
+                             f"Under the award (Schedule B, 3.3) they move up a level — now Level {t['level']}. "
+                             "Please update their pay rates in Xero from the next pay period.",
+                             f"level:{t['staff_id']}:{t['reached']}")
     save(db, rep, emailed=ok)
     return ok
 

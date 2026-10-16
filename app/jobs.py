@@ -68,6 +68,15 @@ def build_digest(db: Session, service: RosterService, now: datetime) -> str | No
         sections.append(f"Clock-in problems on {_fmt_day(yesterday)} (fix on the Clock tab):\n" + "\n".join(problems))
 
     if snap is not None:
+        from app import payreport, travel
+        locations = {sh.location for sh in snap.shifts
+                     if sh.date >= today and payreport.is_first_aid(sh) and sh.location}
+        new = sorted(v.label for v in travel.venues_for(db, locations).values() if v.kind == "unknown")
+        if new:
+            sections.append("First Aid venues to set up (campus or client site, so travel is paid correctly) — "
+                            "Clock → Pay report → First Aid venues:\n" + "\n".join(f"• {n}" for n in new))
+
+    if snap is not None:
         errors = [i for i in snap.issues if i.level == "error"]
         if errors:
             sections.append(f"Roster sheet: {len(errors)} row(s) can't be shown to staff — see the Issues tab.")
@@ -134,7 +143,7 @@ def tick(db: Session, service: RosterService, now: datetime | None = None) -> No
         last_end = payreport.period_for(local.date())[0] - timedelta(days=1)
         if local.date() - last_end <= timedelta(days=2) and state.get(db, "pay_report_sent") != last_end.isoformat():
             try:
-                send(db, payreport.build(db, service, last_end, now))
+                send(db, payreport.build(db, service, last_end, now), now)
             except Exception as e:  # noqa: BLE001 — e.g. roster tab missing
                 db.rollback()
                 mailer.alert(db, "Pay report couldn't be made",
