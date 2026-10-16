@@ -143,7 +143,60 @@ def tick(db: Session, service: RosterService, now: datetime | None = None) -> No
             state.put(db, "pay_report_sent", last_end.isoformat())
             db.commit()
 
+    availability_emails(db, local)
     mailer.send_pending(db, now)
+
+
+REMINDER_DAYS = (1, 10, 14)
+REMINDER_HOUR, SUMMARY_DAY, SUMMARY_HOUR = 9, 16, 7
+
+
+def availability_emails(db: Session, local: datetime) -> None:
+    """Monthly-availability reminders (1st, 10th, 14th) and the summary for the rosterer (16th)."""
+    from app.models import AvailabilityMonth
+
+    s = get_settings()
+    today = local.date()
+    nxt = av.next_month(today)
+    label = av.month_label(nxt)
+    people = [p for p in db.query(Staff).filter_by(active=True) if av.applies_to(db, p)]
+    submitted = {m.staff_id for m in db.query(AvailabilityMonth).filter_by(month=nxt)}
+
+    if today.day in REMINDER_DAYS and local.hour >= REMINDER_HOUR and state.get(db, "avail_reminder_day") != today.isoformat():
+        last = today.day == REMINDER_DAYS[-1]
+        for p in people:
+            if p.availability_mode == "available" and p.staff_id not in submitted and p.email:
+                mailer.queue(db, p.email, f"{'Last call: ' if last else ''}your availability for {label} is due by the 15th",
+                             f"Hi {p.name.split()[0]},\n\nPlease enter the days and times you can work in {label} and "
+                             f"press Submit, by {today:%B} 15 — open the staff app, My shifts → My availability."
+                             + (" This is the last reminder." if last else ""),
+                             f"avail-remind:{p.staff_id}:{today}")
+        state.put(db, "avail_reminder_day", today.isoformat())
+        db.commit()
+
+    if today.day == SUMMARY_DAY and local.hour >= SUMMARY_HOUR and state.get(db, "avail_summary") != nxt:
+        parts = []
+        monthly = [p for p in people if p.availability_mode == "available"]
+        if monthly:
+            parts.append("MONTHLY AVAILABILITY (when they can work)")
+            for p in monthly:
+                rows = av.entries_for_month(db, p.staff_id, nxt, "available")
+                head = f"{p.name} ({p.staff_id})" + ("" if p.staff_id in submitted else " — NOT SUBMITTED")
+                parts.append(f"\n{head}\n{av.entries_text(rows)}")
+        others = [p for p in people if p.availability_mode != "available"]
+        unavail = [(p, av.entries_for_month(db, p.staff_id, nxt, "unavailable")) for p in others]
+        unavail = [(p, rows) for p, rows in unavail if rows]
+        if unavail:
+            parts.append("\n\nUNAVAILABLE (days/times they can't work)")
+            for p, rows in unavail:
+                parts.append(f"\n{p.name} ({p.staff_id})\n{av.entries_text(rows)}")
+        if parts:
+            missing = [p.name for p in monthly if p.staff_id not in submitted]
+            intro = f"Availability for {label}." + (f" Not submitted: {', '.join(missing)}." if missing else " Everyone has submitted.")
+            mailer.queue(db, s.availability_email, f"Availability for {label}", intro + "\n\n" + "\n".join(parts),
+                         f"avail-summary:{nxt}")
+        state.put(db, "avail_summary", nxt)
+        db.commit()
 
 
 def start_background(session_factory, service_factory) -> None:

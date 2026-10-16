@@ -104,11 +104,20 @@ The access tokens are stored encrypted, using a key derived from `PIN_PEPPER`. T
 
 ## Availability
 
-Casual and contract staff (onshore; "Casual"/"Contract" in the staff file, `set-leave … no`, or casual in Xero)
-see **My availability** at the bottom of My shifts, where they add specific days or times they can't work.
-Everyone else (part-time, full-time, offshore) applies for leave instead. Nobody approves availability.
-Admins see it under **Team → Availability**, with the rostered shifts in the next 14 days that clash with
-someone's availability or with approved/requested leave.
+For casual and contract staff (onshore; "Casual"/"Contract" in the staff file, `set-leave … no`, or casual in
+Xero), at the bottom of My shifts. Everyone else applies for leave. Each person is one of two kinds — set
+under **Team → Staff → Availability**:
+
+- **Tells us when they can't work** (default, e.g. Jody): adds days/times they can't work, any time. Each
+  one is emailed to the rosterer (`AVAILABILITY_EMAIL`, e.g. Dan) straight away, and removals too.
+- **Submits monthly availability** (e.g. Craig): adds the days/times they CAN work for next month and
+  presses Submit, by the 15th. Reminders go on the 1st, 10th and 14th (9am) to anyone who hasn't
+  submitted and has an email. Each submission (and any update) is emailed to the rosterer; on the 16th
+  (7am) the rosterer gets a summary of everyone's next month, including who hasn't submitted. Once a month
+  is submitted, rostered shifts outside the given times show as clashes.
+
+Admins see everyone's under **Team → Availability**, with the rostered shifts in the next 14 days that clash
+with someone's availability or with approved/requested leave.
 
 ## Emails
 

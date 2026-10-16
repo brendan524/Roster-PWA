@@ -490,51 +490,91 @@ function fmtWindow(start, end) { return start ? `${fmtTime(start)} – ${fmtTime
 
 function fmtDateRange(a, b) { return a === b ? fmtDay(a) : `${fmtDay(a)} – ${fmtDay(b)}`; }
 
+function entryList(entries, reload) {
+  return h("ul", { class: "avail-dates" }, entries.map((d) => h("li", {},
+    h("span", {}, h("b", {}, fmtDateRange(d.start_date, d.end_date)), ` · ${fmtWindow(d.start, d.end)}`,
+      d.note ? h("span", { class: "meta" }, ` — ${d.note}`) : null),
+    h("button", { class: "link-btn small", onclick: async () => {
+      if (!confirm("Remove this?")) return;
+      try { await api(`/api/availability/me/dates/${d.id}`, { method: "DELETE" }); state.availMsg = "Removed."; await reload(); }
+      catch (ex) { alert(ex.message); }
+    } }, "Remove"))));
+}
+
 function availabilitySection() {
   const A = state.avail;
   if (!A || !A.applies) return null;  // only casual/contract staff; everyone else applies for leave
   const rerender = () => renderMine();
   const reload = async () => { state.avail = await api("/api/availability/me"); rerender(); };
+  const monthly = A.mode === "available";
+  const clashBox = A.clashes.length ? h("div", { class: "clash" },
+    h("b", {}, monthly ? "You're rostered outside the availability you gave:" : "You're rostered at times you said you can't work:"),
+    h("ul", { class: "clash-ul" }, A.clashes.slice(0, state.availAllClashes ? 99 : 4).map((c) =>
+      h("li", {}, `${fmtDay(c.date)} ${fmtTime(c.start)} – ${fmtTime(c.end)}`))),
+    A.clashes.length > 4 && !state.availAllClashes
+      ? h("button", { class: "link-btn dark small", onclick: () => { state.availAllClashes = true; renderMine(); } }, `Show all ${A.clashes.length}`) : null,
+    h("div", {}, "Please talk to Brendan or Aaron about these.")) : null;
+  const msg = state.availMsg ? h("p", { class: "clock-msg ok", role: "status" }, state.availMsg) : null;
+
+  if (!monthly) {
+    return h("section", { class: "avail" },
+      h("h2", { class: "month-title" }, "My availability"),
+      h("p", { class: "hint" }, `Let us know the days or times you can't work, so the roster can be planned around them. Times are ${A.tz_label}.`),
+      clashBox, msg,
+      h("div", { class: "card avail-card" },
+        h("div", { class: "row1" }, h("b", {}, "Days I can't work"),
+          state.availDateOpen ? null : h("button", { class: "link-btn dark", onclick: () => { state.availDateOpen = true; state.availMsg = null; rerender(); } }, "Add")),
+        state.availDateOpen ? dateEditor({ min: A.today, start: A.today, reload, notePh: "Optional, e.g. away, appointment, uni" }) : null,
+        A.dates.length ? entryList(A.dates, reload)
+          : (state.availDateOpen ? null : h("div", { class: "meta" }, "None — add any days or times you can't work (e.g. away, appointments, uni).")),
+      ));
+  }
+
+  const monthCard = (M) => {
+    const [y, m] = M.month.split("-").map(Number);
+    const first = `${M.month}-01`, last = iso(new Date(y, m, 0));
+    const min = first < A.today ? A.today : first;
+    const open = state.availDateOpen === M.month;
+    const status = M.submitted_at
+      ? (M.changed ? h("div", { class: "pay-flags" }, "You've changed this since you submitted — press Submit again to send the update.")
+        : h("div", { class: "pay-leave" }, `Submitted ${fmtAgo(M.submitted_at)}${new Date(M.submitted_at).toDateString() === new Date().toDateString() ? "" : ` on ${fmtDay(M.submitted_at.slice(0, 10))}`}.`))
+      : (M.due >= A.today ? h("div", { class: "meta" }, `Not submitted yet — due by ${fmtDay(M.due)}.`)
+        : h("div", { class: "meta" }, "Not submitted. You can still add times for the rest of this month."));
+    const submit = h("button", { class: "btn small", onclick: async () => {
+      if (!M.entries.length && !confirm(`You haven't added any times for ${M.label}. Submit as not available at all?`)) return;
+      submit.disabled = true;
+      try { await api("/api/availability/me/submit", { method: "POST", body: { month: M.month } });
+        state.availMsg = `${M.label} submitted. Thanks!`; await reload(); }
+      catch (ex) { alert(ex.message); submit.disabled = false; }
+    } }, `${M.submitted_at ? "Send update for" : "Submit"} ${M.label.split(" ")[0]}`);
+    return h("div", { class: "card avail-card" },
+      h("div", { class: "row1" }, h("b", {}, M.label),
+        open || last < A.today ? null : h("button", { class: "link-btn dark", onclick: () => { state.availDateOpen = M.month; state.availMsg = null; rerender(); } }, "Add times")),
+      status,
+      open ? dateEditor({ min, max: last, start: min, reload, notePh: "Optional" }) : null,
+      M.entries.length ? entryList(M.entries, reload) : (open ? null : h("div", { class: "meta" }, "No times added yet.")),
+      M.submitted_at && !M.changed ? null : h("div", { class: "decide-btns", style: "margin-top:10px" }, submit));
+  };
   return h("section", { class: "avail" },
     h("h2", { class: "month-title" }, "My availability"),
-    h("p", { class: "hint" }, `Let us know the days or times you can't work, so the roster can be planned around them. Times are ${A.tz_label}.`),
-    A.clashes.length ? h("div", { class: "clash" },
-      h("b", {}, "You're rostered at times you said you can't work:"),
-      h("ul", { class: "clash-ul" }, A.clashes.slice(0, state.availAllClashes ? 99 : 4).map((c) =>
-        h("li", {}, `${fmtDay(c.date)} ${fmtTime(c.start)} – ${fmtTime(c.end)}`))),
-      A.clashes.length > 4 && !state.availAllClashes
-        ? h("button", { class: "link-btn dark small", onclick: () => { state.availAllClashes = true; renderMine(); } }, `Show all ${A.clashes.length}`) : null,
-      h("div", {}, "Please talk to Brendan or Aaron about these.")) : null,
-    state.availMsg ? h("p", { class: "clock-msg ok", role: "status" }, state.availMsg) : null,
-    h("div", { class: "card avail-card" },
-      h("div", { class: "row1" }, h("b", {}, "Days I can't work"),
-        state.availDateOpen ? null : h("button", { class: "link-btn dark", onclick: () => { state.availDateOpen = true; state.availMsg = null; rerender(); } }, "Add")),
-      state.availDateOpen ? dateEditor(A, reload) : null,
-      A.dates.length ? h("ul", { class: "avail-dates" }, A.dates.map((d) => h("li", {},
-        h("span", {}, h("b", {}, fmtDateRange(d.start_date, d.end_date)), ` · ${fmtWindow(d.start, d.end)}`,
-          d.note ? h("span", { class: "meta" }, ` — ${d.note}`) : null),
-        h("button", { class: "link-btn small", onclick: async () => {
-          if (!confirm("Remove this?")) return;
-          try { await api(`/api/availability/me/dates/${d.id}`, { method: "DELETE" }); state.availMsg = "Removed."; await reload(); }
-          catch (ex) { alert(ex.message); }
-        } }, "Remove"))))
-        : (state.availDateOpen ? null : h("div", { class: "meta" }, "None — add any days or times you can't work (e.g. away, appointments, uni).")),
-    ),
-  );
+    h("p", { class: "hint" }, `Add the days and times you CAN work each month, then press Submit — by the 15th of the month before. Times are ${A.tz_label}.`),
+    clashBox, msg,
+    A.months.slice().reverse().map(monthCard));
 }
 
 function timeInput(value, label) { return h("input", { type: "time", value: value || "", "aria-label": label, step: "900" }); }
 
-function dateEditor(A, reload) {
+function dateEditor({ min, max, start, reload, notePh }) {
   const err = h("p", { class: "form-error", hidden: true, role: "alert" });
-  const from = h("input", { type: "date", id: "adf", min: A.today, value: A.today });
-  const to = h("input", { type: "date", id: "adt", min: A.today, value: A.today });
+  const lim = max ? { max } : {};
+  const from = h("input", { type: "date", id: "adf", min, value: start, ...lim });
+  const to = h("input", { type: "date", id: "adt", min, value: start, ...lim });
   from.onchange = () => { to.min = from.value; if (to.value < from.value) to.value = from.value; };
   const allDay = h("input", { type: "checkbox", id: "ada", checked: true });
   const t1 = timeInput("", "From time"); const t2 = timeInput("", "To time");
   const times = h("div", { class: "avail-times", hidden: true }, t1, h("span", {}, "to"), t2);
   allDay.onchange = () => { times.hidden = allDay.checked; };
-  const note = h("input", { type: "text", id: "adn", maxlength: "300", placeholder: "Optional, e.g. holiday, uni exam" });
+  const note = h("input", { type: "text", id: "adn", maxlength: "300", placeholder: notePh || "Optional" });
   const save = h("button", { class: "btn", type: "submit" }, "Save");
   return h("form", { class: "avail-form", onsubmit: async (e) => {
     e.preventDefault(); err.hidden = true;
@@ -549,7 +589,7 @@ function dateEditor(A, reload) {
       state.availDateOpen = false; state.availMsg = "Saved."; await reload();
     } catch (ex) { err.textContent = ex.message; err.hidden = false; save.disabled = false; }
   } },
-  h("div", { class: "grid2" }, h("div", {}, h("label", { for: "adf" }, "From"), from), h("div", {}, h("label", { for: "adt" }, "To"), to)),
+  h("div", { class: "date-row" }, h("div", {}, h("label", { for: "adf" }, "From"), from), h("div", {}, h("label", { for: "adt" }, "To"), to)),
   h("label", { class: "check", for: "ada" }, allDay, " All day"),
   times,
   h("label", { for: "adn" }, "Note"), note,
@@ -672,14 +712,18 @@ async function renderTeamAvailability(reload = false) {
       h("div", {}, c.reason))))
       : emptyCard("No clashes", "Nobody is rostered while unavailable or on leave."),
     h("h2", { class: "month-title" }, "Casual & contract staff"),
-    h("p", { class: "hint" }, "Days and times they've said they can't work. Everyone else applies for leave."),
+    h("p", { class: "hint" }, "Monthly people give the times they CAN work (due by the 15th); the rest give times they can't. Change who does which under Team → Staff. Everyone else applies for leave."),
     h("select", { "aria-label": "Staff member", onchange: (e) => { state.teamStaff = e.target.value; renderTeamAvailability(); } },
       h("option", { value: "" }, "Everyone"),
       A.staff.map((s) => h("option", { value: s.staff_id, selected: s.staff_id === state.teamStaff }, `${s.name} (${s.staff_id})`))),
     people.map((s) => h("article", { class: "leave-req" },
-      h("div", { class: "row1" }, h("b", {}, s.name), h("span", { class: "meta" }, s.tz_label)),
+      h("div", { class: "row1" }, h("b", {}, s.name), h("span", { class: "meta" }, s.mode === "available" ? "Gives monthly availability" : "Gives unavailability")),
+      s.mode === "available" ? (s.next_submitted_at
+        ? h("div", { class: "pay-leave" }, `${A.next_label}: submitted ${fmtDay(s.next_submitted_at.slice(0, 10))}`)
+        : h("div", { class: A.due >= A.today ? "meta" : "pay-flags" }, `${A.next_label}: not submitted (due ${fmtDay(A.due)})`)) : null,
       s.dates.length ? h("ul", { class: "avail-dates" }, s.dates.map((d) => h("li", {},
         h("span", {}, h("b", {}, fmtDateRange(d.start_date, d.end_date)), ` · ${fmtWindow(d.start, d.end)}`,
+          d.kind === "available" ? h("span", { class: "meta" }, " · can work") : h("span", { class: "meta" }, " · can't work"),
           d.note ? h("span", { class: "meta" }, ` — ${d.note}`) : null,
           d.new ? h("span", { class: "pill new" }, "New") : null)))) : h("div", { class: "meta" }, "Nothing coming up"),
     )),
@@ -718,6 +762,14 @@ async function renderStaffAdmin(reload = false) {
       s.pin_locked || s.login_locked ? h("div", { class: "pay-flags" }, [s.pin_locked ? "PIN locked (too many wrong tries)" : null,
         s.login_locked ? "Login locked (too many wrong passwords)" : null].filter(Boolean).join(" · ")) : null,
       !s.has_pin ? h("div", { class: "pay-flags" }, "No PIN set") : null,
+      s.availability ? h("label", { class: "inline-select" }, "Availability: ",
+        h("select", { onchange: async (e) => {
+          try { await api(`/api/admin/staff/${s.staff_id}/availability-mode`, { method: "POST", body: { mode: e.target.value } });
+            s.availability = e.target.value; state.adminAvail = null; }
+          catch (ex) { alert(ex.message); e.target.value = s.availability; }
+        } },
+          h("option", { value: "unavailable", selected: s.availability === "unavailable" }, "Tells us when they can't work"),
+          h("option", { value: "available", selected: s.availability === "available" }, "Submits monthly availability"))) : null,
       reveal && reveal.staff_id === s.staff_id ? h("div", { class: "new-secret", role: "status" },
         h("div", { class: "meta" }, `${reveal.label} for ${s.name}`), h("div", { class: "secret" }, reveal.value),
         h("div", { class: "meta" }, "Give it to them privately. It won't be shown again.")) : null,

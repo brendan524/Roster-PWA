@@ -6,6 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
+from app import availability as av
 from app import mailer, state
 from app.db import get_db
 from app.deps import admin_staff, ready_staff
@@ -95,6 +96,7 @@ def list_staff(_: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
         "pin_locked": bool(s.pin_locked_until and s.pin_locked_until > now),
         "login_locked": bool(s.locked_until and s.locked_until > now),
         "must_change_password": s.must_change_password,
+        "availability": s.availability_mode if av.applies_to(db, s) else None,
     } for s in sorted(db.query(Staff), key=lambda s: (not s.active, s.name.lower()))]}
 
 

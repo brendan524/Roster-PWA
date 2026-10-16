@@ -19,7 +19,7 @@ from zoneinfo import ZoneInfo
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
-from app.models import AvailabilityDate, LeaveRequest, Staff, XeroEmployeeLink
+from app.models import AvailabilityDate, AvailabilityMonth, LeaveRequest, Staff, XeroEmployeeLink
 from app.roster import Shift
 
 MAX_RANGE_DAYS = 92
@@ -60,11 +60,57 @@ def _hits(span: tuple[datetime, datetime], day: date, start: time | None, end: t
     return span[0] < w_end and w_start < span[1]
 
 
+def _covers(span: tuple[datetime, datetime], day: date, start: time | None, end: time | None, tz: ZoneInfo) -> bool:
+    """Is the whole shift inside this available window on this local day?"""
+    w_start = datetime.combine(day, start or time(0), tz)
+    w_end = datetime.combine(day, end, tz) if end else datetime.combine(day + timedelta(days=1), time(0), tz)
+    return w_start <= span[0] and span[1] <= w_end
+
+
+def month_of(d: date) -> str:
+    return f"{d:%Y-%m}"
+
+
+def next_month(d: date) -> str:
+    return month_of(date(d.year + (d.month == 12), d.month % 12 + 1, 1))
+
+
+def month_bounds(month: str) -> tuple[date, date]:
+    y, m = map(int, month.split("-"))
+    first = date(y, m, 1)
+    nxt = date(y + (m == 12), m % 12 + 1, 1)
+    return first, nxt - timedelta(days=1)
+
+
+def month_label(month: str) -> str:
+    return month_bounds(month)[0].strftime("%B %Y")
+
+
+def entries_for_month(db: Session, staff_id: str, month: str, kind: str | None = None) -> list[AvailabilityDate]:
+    first, last = month_bounds(month)
+    q = db.query(AvailabilityDate).filter(AvailabilityDate.staff_id == staff_id, AvailabilityDate.end_date >= first,
+                                          AvailabilityDate.start_date <= last)
+    if kind:
+        q = q.filter(AvailabilityDate.kind == kind)
+    return q.all()
+
+
+def entry_text(a: AvailabilityDate) -> str:
+    days = a.start_date.strftime("%a %-d %b") if a.start_date == a.end_date else \
+        f"{a.start_date:%a %-d %b} – {a.end_date:%a %-d %b}"
+    return f"{days}, {window_text(a.start_time, a.end_time)}" + (f" — {a.note}" if a.note else "")
+
+
+def entries_text(rows: list[AvailabilityDate]) -> str:
+    rows = sorted(rows, key=lambda a: (a.start_date, a.start_time or time(0)))
+    return "\n".join(f"  • {entry_text(a)}" for a in rows) if rows else "  (nothing entered)"
+
+
 @dataclass
 class Clash:
     shift: Shift
     reason: str
-    kind: str  # "date" | "leave" | "leave_pending"
+    kind: str  # "date" | "not_available" | "leave" | "leave_pending"
 
     def to_dict(self, name: str) -> dict:
         return self.shift.to_dict() | {"name": name, "reason": self.reason, "kind": self.kind}
@@ -105,6 +151,9 @@ def clashes(db: Session, shifts: list[Shift], start: date, end: date, staff_ids:
     sheet_tz = ZoneInfo(get_settings().timezone)
     people = {s.staff_id: s for s in db.query(Staff).filter(Staff.staff_id.in_({sh.staff_id for sh in shifts}))}
     dates, leave = load(db, staff_ids, start - timedelta(days=1), end + timedelta(days=1))
+    submitted: dict[str, set[str]] = {}
+    for m in db.query(AvailabilityMonth).filter(AvailabilityMonth.staff_id.in_(list(people))):
+        submitted.setdefault(m.staff_id, set()).add(m.month)
     out: list[Clash] = []
     for sh in sorted(shifts, key=lambda s: (s.date, s.start, s.staff_name)):
         tz = staff_tz(people.get(sh.staff_id))
@@ -118,8 +167,17 @@ def clashes(db: Session, shifts: list[Shift], start: date, end: date, staff_ids:
                 found = (f"{'Approved' if r.status == 'approved' else 'Requested'} {label.lower()}"
                          + (" (half day)" if half else ""), "leave" if r.status == "approved" else "leave_pending")
                 break
+        person = people.get(sh.staff_id)
+        if found is None and person is not None and person.availability_mode == "available" \
+                and month_of(days[0]) in submitted.get(sh.staff_id, set()):
+            avail = [a for a in dates.get(sh.staff_id, []) if a.kind == "available" and a.start_date <= days[0] <= a.end_date]
+            if not any(_covers(span, days[0], a.start_time, a.end_time, tz) for a in avail):
+                found = ((f"Only available {', '.join(window_text(a.start_time, a.end_time) for a in avail)} that day"
+                          if avail else "Not in their submitted availability"), "not_available")
         if found is None:
             for a in dates.get(sh.staff_id, []):
+                if a.kind != "unavailable":
+                    continue
                 if any(a.start_date <= d <= a.end_date and _hits(span, d, a.start_time, a.end_time, tz) for d in days):
                     found = (f"Unavailable {window_text(a.start_time, a.end_time)}"
                              + (f" — “{a.note}”" if a.note else ""), "date")
@@ -133,7 +191,7 @@ def dates_out(rows: list[AvailabilityDate]) -> list[dict]:
     return [{"id": d.id, "start_date": d.start_date.isoformat(), "end_date": d.end_date.isoformat(),
              "start": d.start_time.strftime("%H:%M") if d.start_time else None,
              "end": d.end_time.strftime("%H:%M") if d.end_time else None,
-             "note": d.note, "created_at": d.created_at.isoformat() if d.created_at else None}
+             "note": d.note, "kind": d.kind, "created_at": d.created_at.isoformat() if d.created_at else None}
             for d in sorted(rows, key=lambda d: (d.start_date, d.start_time or time(0)))]
 
 

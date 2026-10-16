@@ -26,6 +26,9 @@ class Staff(Base):
     # First Aid trainers: teaching hours delivered before the app started counting (800-hour progression).
     teaching_hours_opening: Mapped[float] = mapped_column(Float, default=0)
     teaching_hours_as_of: Mapped[date | None] = mapped_column(Date)
+    # Casual/contract staff: "unavailable" = tell us days/times they can't work, any time;
+    # "available" = submit the days/times they CAN work for each whole month, by the 15th of the month before.
+    availability_mode: Mapped[str] = mapped_column(String(12), default="unavailable")
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
     password_hash: Mapped[str | None] = mapped_column(String(255))
@@ -229,7 +232,8 @@ class LeaveAttachment(Base):
 
 
 class AvailabilityDate(Base):
-    """Dates a casual/contractor can't work (each day in the range; optionally only between two times)."""
+    """Days (optionally between two times) a casual/contractor can't work, or — for people who
+    submit monthly availability — can work."""
 
     __tablename__ = "availability_dates"
 
@@ -240,7 +244,18 @@ class AvailabilityDate(Base):
     start_time: Mapped[time | None] = mapped_column(Time)
     end_time: Mapped[time | None] = mapped_column(Time)
     note: Mapped[str] = mapped_column(String(300), default="")
+    kind: Mapped[str] = mapped_column(String(12), default="unavailable")  # unavailable | available
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class AvailabilityMonth(Base):
+    """A person's monthly availability, submitted (sent to the rosterer)."""
+
+    __tablename__ = "availability_months"
+
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.staff_id", ondelete="CASCADE"), primary_key=True)
+    month: Mapped[str] = mapped_column(String(7), primary_key=True)  # YYYY-MM
+    submitted_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class EmailOutbox(Base):
