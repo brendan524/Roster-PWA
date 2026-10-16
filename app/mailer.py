@@ -42,7 +42,8 @@ def queue(db: Session, to: str | None, subject: str, body: str, dedupe_key: str 
                                       dedupe_key=dedupe_key[:200] if dedupe_key else None)
     if dedupe_key:
         stmt = stmt.on_conflict_do_nothing(index_elements=["dedupe_key"])
-    return db.execute(stmt).rowcount > 0
+    # RETURNING tells us whether a row went in (rowcount isn't reliable for single-row inserts here).
+    return db.execute(stmt.returning(EmailOutbox.id)).first() is not None
 
 
 def queue_admins(db: Session, subject: str, body: str, dedupe_key: str | None = None,

@@ -242,3 +242,34 @@ def test_api_admin_only_and_venues(client, source, monkeypatch):
     r = client.post("/api/admin/venues", json={"name": "Acme", "kind": "client", "address": "5 Client St", "km": 30, "minutes": 25})
     assert r.status_code == 200 and r.json()["km"] == 30
     assert client.post("/api/admin/teaching-hours", json={"staff_id": "AB0010", "hours": 1650, "as_of": "2026-10-04"}).status_code == 200
+
+
+def test_email_it_button(client, source, monkeypatch):
+    s = get_settings()
+    for k, v in (("smtp_user", "hr@x.au"), ("smtp_password", "p"), ("alert_email", "brendan@x.au")):
+        monkeypatch.setattr(s, k, v)
+    add_staff("AB0001", None, role="admin")
+    roster(source)
+    login(client, "AB0001")
+    assert client.post("/api/admin/pay/email?end=2026-10-18").status_code == 200
+    with SessionLocal() as db:
+        [m] = db.query(EmailOutbox).all()
+        assert m.to_addr == "brendan@x.au" and m.subject.startswith("Pay report 5 Oct – 18 Oct 2026")
+    monkeypatch.setattr(s, "alert_email", "")
+    r = client.post("/api/admin/pay/email?end=2026-10-18")
+    assert r.status_code == 400 and "PAY_REPORT_EMAIL" in r.json()["detail"]
+
+
+def test_queue_reports_success_and_dedupe():
+    from app import mailer
+    s = get_settings()
+    old = (s.smtp_user, s.smtp_password)
+    s.smtp_user, s.smtp_password = "hr@x.au", "p"
+    try:
+        with SessionLocal() as db:
+            assert mailer.queue(db, "a@x.au", "Hi", "Body") is True
+            assert mailer.queue(db, "a@x.au", "Hi", "Body", "k1") is True
+            assert mailer.queue(db, "a@x.au", "Hi", "Body", "k1") is False  # same key: not again
+            db.commit()
+    finally:
+        s.smtp_user, s.smtp_password = old
