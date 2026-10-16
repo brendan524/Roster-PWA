@@ -339,3 +339,6 @@ table.pay-shifts tr.sub td { border-top: 0; color: var(--muted); padding-top: 0;
 .venue-km { display: flex; gap: 8px; align-items: center; }
 .venue-km input { width: 90px; }
 .card.venue .btn.small { justify-self: start; }
+.new-secret { background: #EFF7E6; border-radius: 10px; padding: 12px 14px; margin: 10px 0; }
+.new-secret .secret { font-size: 28px; font-weight: 900; letter-spacing: 3px; font-variant-numeric: tabular-nums; margin: 4px 0; word-break: break-all; }
+div.pay-flags { color: var(--warn); font-size: 14px; margin-top: 4px; }

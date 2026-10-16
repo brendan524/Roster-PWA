@@ -180,6 +180,26 @@ function renderChangePassword(voluntary = false) {
   cur.focus();
 }
 
+function pinCard() {
+  const err = h("p", { class: "form-error", hidden: true, role: "alert" });
+  const pw = h("input", { type: "password", id: "pin-pw", autocomplete: "current-password" });
+  const btn = h("button", { class: "btn secondary", type: "submit" }, "Get a new PIN");
+  const shown = state.newPin ? h("div", { class: "new-secret", role: "status" },
+    h("div", { class: "meta" }, "Your new clock-in PIN"), h("div", { class: "secret" }, state.newPin),
+    h("div", { class: "meta" }, "Remember it — it won't be shown again. Your old PIN no longer works.")) : null;
+  return h("form", { class: "card account", style: "margin-top:14px", onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true; btn.disabled = true;
+    try {
+      const r = await api("/api/auth/new-pin", { method: "POST", body: { password: pw.value } });
+      state.newPin = r.pin; state.accountMsg = null; renderAccount(); state.newPin = null;
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
+  } },
+    h("b", {}, "Clock-in PIN"),
+    h("p", { class: "hint" }, "Forgotten your PIN? Get a new one here. The app chooses it for you."),
+    shown,
+    h("label", { for: "pin-pw" }, "Your password (to confirm)"), pw, err, btn);
+}
+
 function renderAccount() {
   state.tab = "account";
   renderTabbar();
@@ -208,6 +228,7 @@ function renderAccount() {
       h("label", { for: "acc-pw" }, "Your password (to confirm)"), pw,
       err, save,
     ),
+    pinCard(),
     h("div", { class: "card account", style: "margin-top:14px" },
       h("b", {}, "Password"),
       h("button", { class: "btn secondary", style: "margin-top:10px", onclick: () => { state.accountMsg = null; renderChangePassword(true); } }, "Change password")),
@@ -607,7 +628,7 @@ async function loadAdmin(refresh = false) {
 
 function teamSwitch() {
   return h("div", { class: "segmented", role: "group", "aria-label": "Show" },
-    [["roster", "Roster"], ["availability", "Availability"]].map(([v, label]) => h("button", {
+    [["roster", "Roster"], ["availability", "Availability"], ["staff", "Staff"]].map(([v, label]) => h("button", {
       "aria-pressed": state.teamView === v ? "true" : "false",
       onclick: () => { state.teamView = v; renderTeam(); },
     }, label)));
@@ -645,7 +666,50 @@ async function renderTeamAvailability(reload = false) {
   );
 }
 
+async function renderStaffAdmin(reload = false) {
+  if (!state.staffList || reload) {
+    render(teamSwitch(), h("p", { class: "loading" }, "Loading staff…"));
+    try { state.staffList = (await api("/api/admin/staff")).staff; }
+    catch (ex) { return render(teamSwitch(), emptyCard("Couldn't load staff", ex.message)); }
+  }
+  const reveal = state.staffReveal;
+  const act = (s, kind) => async () => {
+    const what = kind === "pin" ? "a new clock-in PIN" : "a new temporary password (they'll be logged out everywhere and must choose a new one)";
+    if (!confirm(`Give ${s.name} ${what}?`)) return;
+    try {
+      const r = await api(`/api/admin/staff/${s.staff_id}/reset-${kind === "pin" ? "pin" : "password"}`, { method: "POST" });
+      state.staffReveal = { staff_id: s.staff_id, label: kind === "pin" ? "New PIN" : "Temporary password", value: r.pin || r.password };
+      await renderStaffAdmin(true);
+    } catch (ex) { alert(ex.message); }
+  };
+  const q = (state.staffFilter || "").toLowerCase();
+  const list = state.staffList.filter((s) => !q || `${s.name} ${s.staff_id}`.toLowerCase().includes(q));
+  const search = h("input", { type: "text", placeholder: "Search name or ID", value: state.staffFilter || "", "aria-label": "Search staff",
+    oninput: (e) => { state.staffFilter = e.target.value; clearTimeout(state.staffT); state.staffT = setTimeout(() => { renderStaffAdmin().then(() => { const el = document.querySelector("input[aria-label='Search staff']"); if (el) { el.focus(); el.setSelectionRange(el.value.length, el.value.length); } }); }, 250); } });
+  render(
+    h("div", { class: "page-head" }, h("h1", {}, "Staff"),
+      h("div", { class: "updated" }, h("button", { class: "icon-btn", onclick: () => { state.staffReveal = null; renderStaffAdmin(true); } }, "Refresh"))),
+    teamSwitch(),
+    search,
+    list.map((s) => h("article", { class: "pay-card" },
+      h("div", { class: "row1" }, h("b", {}, s.name), h("span", { class: "meta" }, s.staff_id)),
+      h("div", { class: "meta" }, [s.role === "admin" ? "Admin" : null, s.employment_status, s.location_type,
+        s.email || "no email", s.active ? null : "INACTIVE"].filter(Boolean).join(" · ")),
+      s.pin_locked || s.login_locked ? h("div", { class: "pay-flags" }, [s.pin_locked ? "PIN locked (too many wrong tries)" : null,
+        s.login_locked ? "Login locked (too many wrong passwords)" : null].filter(Boolean).join(" · ")) : null,
+      !s.has_pin ? h("div", { class: "pay-flags" }, "No PIN set") : null,
+      reveal && reveal.staff_id === s.staff_id ? h("div", { class: "new-secret", role: "status" },
+        h("div", { class: "meta" }, `${reveal.label} for ${s.name}`), h("div", { class: "secret" }, reveal.value),
+        h("div", { class: "meta" }, "Give it to them privately. It won't be shown again.")) : null,
+      h("div", { class: "decide-btns", style: "margin-top:8px" },
+        h("button", { class: "btn small secondary", onclick: act(s, "pin") }, "Reset PIN"),
+        s.staff_id === state.me.staff_id ? null : h("button", { class: "btn small secondary", onclick: act(s, "password") }, "Reset password")),
+    )),
+  );
+}
+
 function renderTeam() {
+  if (state.teamView === "staff") return renderStaffAdmin();
   if (state.teamView === "availability") return renderTeamAvailability();
   const a = state.admin;
   setBanner(a);
@@ -1326,6 +1390,7 @@ async function start() {
   state.clock = null; state.clockMsg = null;
   state.leave = null; state.leaveAdmin = null; state.leaveFormOpen = false; state.leaveMsg = null;
   state.avail = null; state.adminAvail = null; state.availDateOpen = false; state.availMsg = null; state.availAllClashes = false;
+  state.staffList = null; state.staffReveal = null; state.newPin = null; state.pay = null; state.venues = null;
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
   if (xeroReturn && state.me.role === "admin") {

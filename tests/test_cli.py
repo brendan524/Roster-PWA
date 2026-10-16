@@ -142,3 +142,27 @@ def test_set_pin_lifts_lockout():
     with SessionLocal() as db:
         s = db.get(Staff, "AB0010")
         assert s.pin_failed == 0 and s.pin_locked_until is None and s.pin_hash
+
+
+def test_pin_and_password_resets_via_app(client, source):
+    from app.security import hash_pin, verify_password
+    from tests.conftest import PASSWORD, add_staff, login
+    add_staff("AB0001", None, role="admin")
+    add_staff("AB0010", None)
+    login(client, "AB0010")
+    assert client.post("/api/auth/new-pin", json={"password": "wrong"}).status_code == 400
+    pin = client.post("/api/auth/new-pin", json={"password": PASSWORD}).json()["pin"]
+    with SessionLocal() as db:
+        assert db.get(Staff, "AB0010").pin_hash == hash_pin(pin)
+    assert client.get("/api/admin/staff").status_code == 403
+    assert client.post("/api/admin/staff/AB0001/reset-pin").status_code == 403
+    client.post("/api/auth/logout")
+    login(client, "AB0001")
+    assert {s["staff_id"] for s in client.get("/api/admin/staff").json()["staff"]} == {"AB0001", "AB0010"}
+    new = client.post("/api/admin/staff/AB0010/reset-pin").json()["pin"]
+    assert new != pin and len(new) == 6
+    r = client.post("/api/admin/staff/AB0010/reset-password").json()
+    with SessionLocal() as db:
+        s = db.get(Staff, "AB0010")
+        assert verify_password(s.password_hash, r["password"]) and s.must_change_password
+    assert client.post("/api/admin/staff/AB0001/reset-password").status_code == 400  # not your own
