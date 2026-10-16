@@ -304,3 +304,12 @@ export PIN_PEPPER=dev COOKIE_SECURE=false ROSTER_SOURCE=csv ROSTER_CSV_DIR=./sam
 ## Branding
 
 `static/logo.png` (header and login screen) and `static/icons/*` (home-screen icon, favicon) are generated from the AB Group logo SVG, always on black. The supplied SVG wraps a ~435 px image, so if a true vector version turns up, regenerate these from it at higher resolution. After changing any of them, bump `VERSION` in `static/sw.js` so installed apps pick up the new files.
+
+## Still to do
+
+- **Onboarding new staff** — an admin screen (possibly on the kiosk) to add a new employee: details,
+  Staff ID, temporary password and PIN, instead of the `seed-staff` CSV. Not needed yet.
+- **Stage 6 (optional): expenses** — claims with receipt photos; approved First Aid parking/tolls/accommodation
+  feed the pay report as reimbursements.
+- **Xero draft pay run** — once a couple of fortnights' reports have been checked by hand, push the quantities
+  to Xero as timesheets / a draft pay run for approval.

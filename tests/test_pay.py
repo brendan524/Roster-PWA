@@ -348,3 +348,37 @@ def test_digest_lists_new_venues(client, source, monkeypatch):
     with SessionLocal() as db:
         body = jobs.build_digest(db, service, datetime.now(UTC))
     assert "First Aid venues to set up" in body and "• Acme Pty Ltd" in body and "Galactic" not in body
+
+
+def test_first_aid_lateness_docked_and_long_day_flag(source, monkeypatch):
+    monkeypatch.setattr(get_settings(), "office_address", "HQ")
+    person("AB0018", "Casual", travel_eligible=True)
+    with SessionLocal() as db:
+        db.add(Venue(name="far client", label="Far Client", kind="client", address="Far St"))
+        db.add(TravelLeg(origin="HQ", destination="Far St", km=90, minutes=95, source="manual"))
+        db.add(TravelLeg(origin="Far St", destination="HQ", km=90, minutes=95, source="manual"))
+        db.commit()
+    mon, tue = date(2026, 10, 5), date(2026, 10, 6)
+    roster(source, (mon, "AB0018", "09:00", "12:00", "First Aid", "Tullamarine", 2.5),
+           (tue, "AB0018", "08:00", "16:00", "First Aid", "Far Client", 6.0))
+    clock("AB0018", mon, "09:20", "11:55")   # 20 late + 5 early = 25 min → 0.5 h docked
+    clock("AB0018", tue, "08:00", "16:00")
+    _, by = build()
+    p = by["AB0018"]
+    it = items(p)
+    # Mon: 0.5 buffer − 0.5 docked = 0. Tue: 0.5 buffer + 190 min travel (3.17 h) = 3.67.
+    assert it["Non-Teaching Duties"] == 3.67 and it["Sessional Teaching"] == 2.5 + 5
+    text = " | ".join(p["flags"])
+    assert "20 min late and left 5 min early — 0.5 h docked from Non-Teaching Duties" in text
+    assert "8.67 h paid (teaching 5 + non-teaching 3.67) — over 7.6 h in a day" in text
+
+
+def test_admin_sets_staff_email(client, source):
+    add_staff("AB0001", None, role="admin")
+    add_staff("AB0010", None)
+    add_staff("AB0011", "taken@x.au")
+    login(client, "AB0001")
+    assert client.post("/api/admin/staff/AB0010/email", json={"email": "Sonya@X.au"}).json()["email"] == "sonya@x.au"
+    assert client.post("/api/admin/staff/AB0010/email", json={"email": "taken@x.au"}).status_code == 409
+    assert client.post("/api/admin/staff/AB0010/email", json={"email": "nope"}).status_code == 400
+    assert client.post("/api/admin/staff/AB0010/email", json={"email": ""}).json()["email"] is None

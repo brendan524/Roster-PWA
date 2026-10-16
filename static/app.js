@@ -758,7 +758,18 @@ async function renderStaffAdmin(reload = false) {
     list.map((s) => h("article", { class: "pay-card" },
       h("div", { class: "row1" }, h("b", {}, s.name), h("span", { class: "meta" }, s.staff_id)),
       h("div", { class: "meta" }, [s.role === "admin" ? "Admin" : null, s.employment_status, s.location_type,
-        s.email || "no email", s.active ? null : "INACTIVE"].filter(Boolean).join(" · ")),
+        s.active ? null : "INACTIVE"].filter(Boolean).join(" · ")),
+      (() => {
+        const input = h("input", { type: "email", value: s.email || "", placeholder: "No email — add one", "aria-label": `${s.name} email` });
+        const save = h("button", { class: "link-btn dark small", onclick: async () => {
+          save.disabled = true;
+          try {
+            const r = await api(`/api/admin/staff/${s.staff_id}/email`, { method: "POST", body: { email: input.value } });
+            s.email = r.email; save.textContent = "Saved ✓"; setTimeout(() => { save.textContent = "Save"; save.disabled = false; }, 1500);
+          } catch (ex) { alert(ex.message); save.disabled = false; }
+        } }, "Save");
+        return h("div", { class: "staff-email" }, input, save);
+      })(),
       s.pin_locked || s.login_locked ? h("div", { class: "pay-flags" }, [s.pin_locked ? "PIN locked (too many wrong tries)" : null,
         s.login_locked ? "Login locked (too many wrong passwords)" : null].filter(Boolean).join(" · ")) : null,
       !s.has_pin ? h("div", { class: "pay-flags" }, "No PIN set") : null,

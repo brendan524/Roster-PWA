@@ -1,5 +1,7 @@
 """Staff list for admins, PIN/password resets (admin and self-service)."""
 
+import re
+
 from datetime import UTC, datetime
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -138,3 +140,23 @@ def set_travel(staff_id: str, body: TravelIn, _: Staff = Depends(admin_staff), d
     s.travel_eligible = body.on
     db.commit()
     return {"ok": True}
+
+
+class EmailIn(BaseModel):
+    email: str = Field("", max_length=254)
+
+
+@router.post("/admin/staff/{staff_id}/email")
+def set_staff_email(staff_id: str, body: EmailIn, _: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
+    """Admins can set someone's email (for notifications; it also works as their login)."""
+    s = _get(db, staff_id)
+    email = body.email.strip().lower() or None
+    if email and not re.fullmatch(r"[^@\s]+@[^@\s]+\.[^@\s]+", email):
+        raise HTTPException(400, "That email address doesn't look right.")
+    if email:
+        other = db.query(Staff).filter(Staff.email == email, Staff.staff_id != s.staff_id).first()
+        if other:
+            raise HTTPException(409, f"{email} is already used by {other.name}.")
+    s.email = email
+    db.commit()
+    return {"ok": True, "email": email}

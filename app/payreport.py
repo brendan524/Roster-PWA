@@ -9,7 +9,8 @@ Pay follows the ROSTER; clock times check it.
   A day with more than one shift = 1 Broken Shift Allowance + 1 Excess Fares.
 - First Aid (casual): Sessional Teaching = the roster's teaching hours (at least
   2 per course, at most 5 per day). Non-Teaching Duties = 0.5 hours per course
-  plus travel time to client sites; Vehicle km for the same trips. First Aid and
+  plus travel time to client sites, less any lateness / leaving early (to 15
+  min); Vehicle km for the same trips. Days paid over 7.6 h are flagged. First Aid and
   Laundry allowances = 1 per week (Mon–Sun) with at least one course worked.
   Courses outside 7am–7pm weekdays / 7am–12:30pm Saturdays, or on Sundays or
   public holidays, are flagged.
@@ -40,6 +41,7 @@ from app.roster import RosterService, Shift
 
 PERIOD_DAYS = 14
 TEACH_MIN, TEACH_DAY_CAP, BUFFER = 2.0, 5.0, 0.5
+FA_DAY_HOURS = 7.6  # First Aid: flag days paid more than this (teaching + non-teaching) to check for overtime
 FIT_MIN, FIT_DAY_OT, WEEK_OT = 1.0, 10.0, 38.0
 TOLERANCE_MIN = 7  # clock differences under this aren't worth a note (rounding absorbs them)
 MILESTONE = 800
@@ -208,12 +210,16 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
                 teaching = max(0.0, _h(re_ - rs) - BUFFER)
                 pr.flags.append(f"{_day(sh.date)}: no Teaching Hours in the roster — assumed {teaching:g} h; check")
             row["teaching_rostered"] = teaching
-            fa_days[sh.staff_id][sh.date].append((sh, teaching))
             pr.teaching_delivered += teaching
-            if late > TOLERANCE_MIN:
-                pr.flags.append(f"{_day(sh.date)}: clocked in {late} min after the rostered start")
-            if early_leave > TOLERANCE_MIN:
-                pr.flags.append(f"{_day(sh.date)}: clocked out {early_leave} min before the rostered end")
+            # Late / leaving early comes off Non-Teaching Duties (teaching hours stay as rostered).
+            missed = max(0, late) + max(0, early_leave)
+            dock = round15(missed / 60) if missed > TOLERANCE_MIN else 0.0
+            if dock:
+                why = " and ".join(w for w in (f"{late} min late" if late > 0 else "",
+                                                f"left {early_leave} min early" if early_leave > 0 else "") if w)
+                row["notes"].append(f"{why} — {dock:g} h docked from Non-Teaching Duties")
+                pr.flags.append(f"{_day(sh.date)}: {why} — {dock:g} h docked from Non-Teaching Duties")
+            fa_days[sh.staff_id][sh.date].append((sh, teaching, dock))
             if extra > 15:
                 row["notes"].append(f"{extra} min clocked outside the roster (not paid unless approved)")
                 pr.flags.append(f"{_day(sh.date)}: clocked {extra} min longer than the rostered shift")
@@ -296,8 +302,8 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
         weeks = set()
         for d in sorted(days):
             entries = days[d]
-            teach = sum(max(TEACH_MIN, t) for _, t in entries)
-            if any(t < TEACH_MIN for _, t in entries):
+            teach = sum(max(TEACH_MIN, t) for _, t, _dk in entries)
+            if any(t < TEACH_MIN for _, t, _dk in entries):
                 pr.flags.append(f"{_day(d)}: course under 2 teaching hours — paid the 2-hour minimum")
             if teach > TEACH_DAY_CAP:
                 pr.flags.append(f"{_day(d)}: {teach:g} teaching hours — capped at the 5-hour daily rate")
@@ -305,10 +311,10 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
             elif teach == TEACH_DAY_CAP:
                 pr.flags.append(f"{_day(d)}: 5 teaching hours — the full daily rate")
             pr.add(TEACHING, teach)
-            pr.add(NON_TEACHING, BUFFER * len(entries))
+            non_teaching = BUFFER * len(entries)
             clients = []
             eligible = staff[sid].travel_eligible if sid in staff else False
-            for sh, _t in entries:
+            for sh, _t, _dk in entries:
                 v = venues.get(travel.key(sh.location))
                 row = next((r for r in pr.shifts if r["date"] == d.isoformat() and r["start"] == sh.start), None)
                 if v is not None and v.kind == "campus":
@@ -328,12 +334,18 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
                     pr.flags.append(f"{_day(d)}: travel to {', '.join(clients)} not included — {trip.problem}")
                 else:
                     hours, km = round(trip.minutes / 60, 2), round(trip.km, 1)
-                    pr.add(NON_TEACHING, hours)
+                    non_teaching += hours
                     pr.add(VEHICLE, km)
                     for row in pr.shifts:
                         if row["date"] == d.isoformat():
                             row["travel"] = {"km": km, "hours": hours}
                             break
+            docked = min(sum(dk for _, _t, dk in entries), non_teaching)
+            non_teaching = round(non_teaching - docked, 2)
+            pr.add(NON_TEACHING, non_teaching)
+            if teach + non_teaching > FA_DAY_HOURS:
+                pr.flags.append(f"{_day(d)}: {teach + non_teaching:g} h paid (teaching {teach:g} + non-teaching "
+                                f"{non_teaching:g}) — over {FA_DAY_HOURS:g} h in a day; check whether overtime applies")
             weeks.add(d - timedelta(days=d.weekday()))
         pr.add(FIRST_AID_ALLOW, len(weeks))
         pr.add(LAUNDRY, len(weeks))
