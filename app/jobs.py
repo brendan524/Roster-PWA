@@ -96,7 +96,13 @@ def tick(db: Session, service: RosterService, now: datetime | None = None) -> No
     if 0 <= s.digest_hour <= 23 and local.hour >= s.digest_hour and state.get(db, "digest_day") != today:
         body = build_digest(db, service, now)
         if body:
-            mailer.queue_admins(db, f"AB staff app — daily check, {local:%a %-d %b}", body, f"digest:{today}")
+            subject = f"AB staff app — daily check, {local:%a %-d %b}"
+            if s.digest_email.strip():
+                for addr in (a.strip() for a in s.digest_email.split(",")):
+                    if addr:
+                        mailer.queue(db, addr, subject, body, f"digest:{today}:{addr}")
+            else:
+                mailer.queue_admins(db, subject, body, f"digest:{today}")
         state.put(db, "digest_day", today)
         db.commit()
 

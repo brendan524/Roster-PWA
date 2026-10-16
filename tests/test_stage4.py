@@ -312,3 +312,16 @@ def test_cli_set_email_and_reseed_keeps_it(tmp_path):
     assert seed_staff(str(p)) == 0
     with SessionLocal() as db:
         assert db.get(Staff, "AB0010").email == "sonya@example.com"
+
+
+def test_digest_goes_only_to_digest_email(client, source, email_on, monkeypatch):
+    monkeypatch.setattr(email_on, "digest_email", "dylan@example.com")
+    add_staff("AB0001", None, role="admin")
+    add_staff("AB0010", None)
+    set_email("AB0001", "brendan@example.com")
+    yesterday = today() - timedelta(days=1)
+    roster(source, (yesterday, "AB0010", "09:00", "17:00"))
+    service = app.dependency_overrides[get_roster_service]()
+    with SessionLocal() as db:
+        jobs.tick(db, service, now=at_local(7))
+    assert [to for to, _, _ in outbox()] == ["dylan@example.com"]
