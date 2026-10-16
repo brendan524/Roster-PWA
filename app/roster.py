@@ -60,6 +60,21 @@ _ALIAS_LOOKUP = {alias: key for key, aliases in COLUMN_ALIASES.items() for alias
 
 # ---- data ------------------------------------------------------------------
 
+STANDARD_LUNCH_MIN = 60
+_LUNCH_RE = re.compile(r"(\d{1,3})\s*(?:m|min|mins|minute|minutes)\b\W{0,3}(?:lunch|break)"
+                       r"|(?:lunch|break)\W{0,3}(?:of\s+)?(\d{1,3})\s*(?:m|min|mins|minute|minutes)\b", re.I)
+
+
+def short_lunch_minutes(notes: str) -> int:
+    """How much earlier a shift finishes because the Notes say a shorter lunch, e.g. "30 min lunch" → 30
+    (standard lunch is an hour). 0 if the notes don't say so."""
+    m = _LUNCH_RE.search(notes or "")
+    if not m:
+        return 0
+    minutes = int(m.group(1) or m.group(2))
+    return STANDARD_LUNCH_MIN - minutes if 0 <= minutes < STANDARD_LUNCH_MIN else 0
+
+
 @dataclass(frozen=True)
 class Shift:
     tab: str

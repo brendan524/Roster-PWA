@@ -24,7 +24,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.models import Kiosk, Punch, PunchVoid, Staff
-from app.roster import Shift
+from app.roster import Shift, short_lunch_minutes
 from app.security import hash_pin
 
 MAX_QUEUE_AGE = timedelta(days=14)  # older queued punches are still stored, but flagged
@@ -245,6 +245,8 @@ def shift_bounds(shift: Shift, tz: ZoneInfo) -> tuple[datetime, datetime]:
     start = datetime.combine(shift.date, time.fromisoformat(shift.start), tz)
     end_date = shift.date + timedelta(days=1 if shift.overnight else 0)
     end = datetime.combine(end_date, time.fromisoformat(shift.end), tz)
+    # A shorter lunch noted on the roster ("30 min lunch") means they finish that much earlier.
+    end -= timedelta(minutes=short_lunch_minutes(shift.notes))
     return start.astimezone(UTC), end.astimezone(UTC)
 
 

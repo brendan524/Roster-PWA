@@ -382,3 +382,27 @@ def test_admin_sets_staff_email(client, source):
     assert client.post("/api/admin/staff/AB0010/email", json={"email": "taken@x.au"}).status_code == 409
     assert client.post("/api/admin/staff/AB0010/email", json={"email": "nope"}).status_code == 400
     assert client.post("/api/admin/staff/AB0010/email", json={"email": ""}).json()["email"] is None
+
+
+def test_short_lunch_note_shortens_the_shift(source):
+    from app.punches import analyse, pair_sessions
+    from app.roster import short_lunch_minutes
+    assert [short_lunch_minutes(t) for t in ("30 min lunch", "Lunch 30mins", "45 minute lunch", "1 hr lunch", "")] == [30, 30, 15, 0, 0]
+    person("AB0003", "Contractor", location="offshore")
+    d = date(2026, 10, 6)
+    tabs = {"2026-10": [HEADER, [d.isoformat(), "AB0003", "Dan", "Offshore", "VA", "09:00", "18:00", "WrkPod", "", "", "30 min lunch"]],
+            "2026-11": [HEADER]}
+    source.tabs = tabs
+    clock("AB0003", d, "09:00", "17:30")
+    rep, by = build()
+    row = by["AB0003"]["shifts"][0]
+    assert row["end"] == "17:30" and row["rostered_hours"] == 8.5
+    assert "30 min lunch — finishes 30 min earlier (rostered end 18:00)" in row["notes"]
+    assert "Tue 6 Oct 09:00–17:30: 30 min lunch" in payreport.email_text(rep)
+    # The Clock tab doesn't call it leaving early.
+    service = app.dependency_overrides[get_roster_service]()
+    with SessionLocal() as db:
+        from app.models import Punch as P
+        sessions = pair_sessions(db.query(P).filter_by(staff_id="AB0003").order_by(P.occurred_at).all())
+        analyse(sessions, service.shifts_between(d, d), MEL, NOW)
+    assert not [f for f in sessions[0].flags if f["code"] == "early_finish"]

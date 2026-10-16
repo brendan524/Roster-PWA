@@ -37,7 +37,7 @@ from app.config import get_settings
 from app.leave import count_days, label_for
 from app.models import ExpenseClaim, LeaveRequest, PayReport, Punch, Staff, XeroEmployeeLink
 from app.punches import analyse, effective_punches, local_day_bounds, pair_sessions, shift_bounds
-from app.roster import RosterService, Shift
+from app.roster import STANDARD_LUNCH_MIN, RosterService, Shift, short_lunch_minutes
 
 PERIOD_DAYS = 14
 TEACH_MIN, TEACH_DAY_CAP, BUFFER = 2.0, 5.0, 0.5
@@ -182,6 +182,9 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
         row = {"date": sh.date.isoformat(), "start": sh.start, "end": sh.end, "location": sh.location,
                "department": sh.department, "role": sh.role, "clock_in": _fmt_t(cin, tz), "clock_out": _fmt_t(cout, tz),
                "rostered_hours": round(_h(re_ - rs), 2), "notes": []}
+        if (short := short_lunch_minutes(sh.notes)):
+            row["end"] = re_.astimezone(tz).strftime("%H:%M")
+            row["notes"].append(f"{STANDARD_LUNCH_MIN - short} min lunch — finishes {short} min earlier (rostered end {sh.end})")
         pr.shifts.append(row)
         ph = holidays.holiday(sh.date)
         if sess is None:
@@ -464,6 +467,10 @@ def email_text(rep: dict) -> str:
                     lines.append(f"  {it['item']:<34} {it['qty']:g}")
                 if not p["items"]:
                     lines.append("  Nothing to pay this period")
+            if p["employment"] == "salaried":
+                for s in p["shifts"]:
+                    for n in s["notes"]:
+                        lines.append(f"  {date.fromisoformat(s['date']):%a %-d %b} {s['start']}–{s['end']}: {n}")
             for ex in p.get("expenses", []):
                 lines.append(f"  Claim: {ex}")
             for lv in p["leave"]:
