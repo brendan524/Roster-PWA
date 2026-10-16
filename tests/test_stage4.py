@@ -325,3 +325,26 @@ def test_digest_goes_only_to_digest_email(client, source, email_on, monkeypatch)
     with SessionLocal() as db:
         jobs.tick(db, service, now=at_local(7))
     assert [to for to, _, _ in outbox()] == ["dylan@example.com"]
+
+
+def test_digest_weekdays_and_monday_covers_weekend(client, source, email_on, monkeypatch):
+    from app.jobs import digest_weekdays
+    monkeypatch.setattr(email_on, "digest_days", "mon-fri")
+    assert digest_weekdays() == {0, 1, 2, 3, 4}
+    monkeypatch.setattr(email_on, "digest_days", "mon,wed")
+    assert digest_weekdays() == {0, 2}
+    monkeypatch.setattr(email_on, "digest_days", "mon-fri")
+    monkeypatch.setattr(email_on, "pay_report_hour", -1)
+    add_staff("AB0001", None, role="admin")
+    add_staff("AB0010", None)
+    set_email("AB0001", "brendan@example.com")
+    mon = today() - timedelta(days=today().weekday()) - timedelta(days=7)  # last week's Monday (past, so roster loads)
+    sat, sun = mon - timedelta(days=2), mon - timedelta(days=1)
+    roster(source, (sat, "AB0010", "09:00", "11:00"), (sun, "AB0010", "09:00", "11:00"))
+    service = app.dependency_overrides[get_roster_service]()
+    with SessionLocal() as db:
+        jobs.tick(db, service, now=at_local(7, sun))  # Sunday: no email
+        assert outbox() == []
+        jobs.tick(db, service, now=at_local(7, mon))
+    [(_, _, body)] = outbox()
+    assert f"Clock-in problems on {sat:%a %-d %b}" in body and f"Clock-in problems on {sun:%a %-d %b}" in body

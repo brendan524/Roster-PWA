@@ -34,6 +34,21 @@ def _fmt_day(d) -> str:
     return d.strftime("%a %-d %b")
 
 
+DAY_NAMES = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
+
+
+def digest_weekdays() -> set[int]:
+    """DIGEST_DAYS like "mon-fri" or "mon,wed,fri" → weekday numbers (Monday = 0)."""
+    out: set[int] = set()
+    for part in get_settings().digest_days.lower().replace(" ", "").split(","):
+        if "-" in part:
+            a, b = (DAY_NAMES.index(x[:3]) for x in part.split("-", 1))
+            out.update(range(a, b + 1))
+        elif part[:3] in DAY_NAMES:
+            out.add(DAY_NAMES.index(part[:3]))
+    return out or set(range(7))
+
+
 def build_digest(db: Session, service: RosterService, now: datetime) -> str | None:
     from app.api.availability import CLASH_DAYS, LEAVE_LABELS
     from app.api.clock import day_report
@@ -55,17 +70,24 @@ def build_digest(db: Session, service: RosterService, now: datetime) -> str | No
                      f"{names.get(c.shift.staff_id, c.shift.staff_name)} — {c.reason}" for c in found]
             sections.append(f"Rostered while unavailable or on leave (next {CLASH_DAYS} days):\n" + "\n".join(lines))
 
-    yesterday = today - timedelta(days=1)
-    sessions, no_shows, _known, _err = day_report(db, service, yesterday, now)
-    problems = []
-    for s in sessions:
-        for f in s.flags:
-            if f["level"] == "error":
-                problems.append(f"• {names.get(s.staff_id, s.staff_id)} — {f['label']}")
-    for sh in no_shows:
-        problems.append(f"• {names.get(sh.staff_id, sh.staff_name)} — rostered {sh.start}–{sh.end}, didn't clock in")
-    if problems:
-        sections.append(f"Clock-in problems on {_fmt_day(yesterday)} (fix on the Clock tab):\n" + "\n".join(problems))
+    # Every day since the last day the check goes out (Monday covers the weekend).
+    days_back, d = [], today - timedelta(days=1)
+    while True:
+        days_back.insert(0, d)
+        if d.weekday() in digest_weekdays() or len(days_back) >= 7:
+            break
+        d -= timedelta(days=1)
+    for day in days_back:
+        sessions, no_shows, _known, _err = day_report(db, service, day, now)
+        problems = []
+        for s in sessions:
+            for f in s.flags:
+                if f["level"] == "error":
+                    problems.append(f"• {names.get(s.staff_id, s.staff_id)} — {f['label']}")
+        for sh in no_shows:
+            problems.append(f"• {names.get(sh.staff_id, sh.staff_name)} — rostered {sh.start}–{sh.end}, didn't clock in")
+        if problems:
+            sections.append(f"Clock-in problems on {_fmt_day(day)} (fix on the Clock tab):\n" + "\n".join(problems))
 
     if snap is not None:
         from app import payreport, travel
@@ -93,7 +115,8 @@ def tick(db: Session, service: RosterService, now: datetime | None = None) -> No
     today = local.date().isoformat()
 
     # Daily digest, once per day after DIGEST_HOUR.
-    if 0 <= s.digest_hour <= 23 and local.hour >= s.digest_hour and state.get(db, "digest_day") != today:
+    if (0 <= s.digest_hour <= 23 and local.hour >= s.digest_hour and local.weekday() in digest_weekdays()
+            and state.get(db, "digest_day") != today):
         body = build_digest(db, service, now)
         if body:
             subject = f"AB staff app — daily check, {local:%a %-d %b}"

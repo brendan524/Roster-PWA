@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     availability_email: str = ""  # whoever builds the roster (Dan): staff availability as it comes in
     app_url: str = ""  # e.g. https://hr.abgroup.au, for links in emails
     digest_hour: int = 7  # daily admin digest, local time; -1 = off
+    digest_days: str = "mon-fri"  # days the daily check goes out, e.g. "mon-fri" or "mon,wed,fri"
     digest_email: str = ""  # who gets the daily check (comma-separated); empty = every admin with an email
     jobs_enabled: bool = True  # background email/alert jobs (off in tests)
 
