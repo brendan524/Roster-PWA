@@ -88,6 +88,7 @@ async function statusBar() {
 }
 
 async function renderHome() {
+  if (updateReady) return location.reload();
   const time = h("div", { class: "k-time" });
   const date = h("div", { class: "k-date" });
   const tick = () => {
@@ -186,5 +187,19 @@ setInterval(() => { if (kiosk) checkIn(); }, 10 * 60 * 1000);
 document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") keepAwake(); });
 keepAwake();
 
-if ("serviceWorker" in navigator) navigator.serviceWorker.register("/sw.js").catch(() => {});
+// Kiosks stay open for days: check for a new app version every 10 minutes and switch to it
+// when the home screen is showing (never mid-PIN).
+let updateReady = false;
+const atHome = () => !!root.querySelector(".k-buttons");
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.register("/sw.js").then((reg) => {
+    setInterval(() => reg.update().catch(() => {}), 10 * 60 * 1000);
+  }).catch(() => {});
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController) { hadController = true; return; }
+    updateReady = true;
+    if (atHome()) location.reload();
+  });
+}
 start();

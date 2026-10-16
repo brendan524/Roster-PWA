@@ -1466,7 +1466,20 @@ window.addEventListener("online", () => flushMine());
 setInterval(() => { if (state.me && navigator.onLine) flushMine(); }, 30000);
 
 if ("serviceWorker" in navigator) {
-  navigator.serviceWorker.register("/sw.js").catch(() => {});
+  navigator.serviceWorker.register("/sw.js").then((reg) => {
+    // Installed apps are often resumed rather than restarted: look for a new version each time they come back.
+    document.addEventListener("visibilitychange", () => { if (document.visibilityState === "visible") reg.update().catch(() => {}); });
+  }).catch(() => {});
+  // A new version took over: reload to use it, unless the person is typing (then on their next return).
+  let hadController = !!navigator.serviceWorker.controller;
+  navigator.serviceWorker.addEventListener("controllerchange", () => {
+    if (!hadController) { hadController = true; return; }  // first install, nothing old running
+    const typing = () => document.activeElement && ["INPUT", "TEXTAREA", "SELECT"].includes(document.activeElement.tagName);
+    if (!typing()) return location.reload();
+    document.addEventListener("visibilitychange", function once() {
+      if (document.visibilityState === "visible") { document.removeEventListener("visibilitychange", once); location.reload(); }
+    });
+  });
 }
 
 boot();

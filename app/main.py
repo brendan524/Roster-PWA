@@ -25,7 +25,9 @@ CSP = (
     "frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
 )
 CSRF_HEADER = "x-ab-app"
-NO_CACHE_FILES = {"/", "/index.html", "/sw.js", "/manifest.webmanifest", "/kiosk.html", "/kiosk.webmanifest"}
+# Always re-checked with the server (ETag), so phones never run an old copy of the app.
+NO_CACHE_FILES = {"/", "/index.html", "/sw.js", "/manifest.webmanifest", "/kiosk.html", "/kiosk.webmanifest",
+                  "/app.js", "/app.css", "/clock-shared.js", "/kiosk.js", "/kiosk.css"}
 
 
 @app.middleware("http")

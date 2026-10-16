@@ -5,7 +5,7 @@
      marked with x-ab-offline so the app can say so. Cleared on logout.
    - Everything else under /api (logins, admin data) is never cached. */
 
-const VERSION = "v16";
+const VERSION = "v17";
 const SHELL = `ab-shell-${VERSION}`;
 const DATA = "ab-data"; // personal roster cache; wiped on logout
 const SHELL_FILES = ["/", "/app.css", "/app.js", "/manifest.webmanifest",
@@ -15,7 +15,9 @@ const SHELL_FILES = ["/", "/app.css", "/app.js", "/manifest.webmanifest",
 const OFFLINE_API = ["/api/auth/me", "/api/roster/me", "/api/clock/me"];
 
 self.addEventListener("install", (e) => {
-  e.waitUntil(caches.open(SHELL).then((c) => c.addAll(SHELL_FILES)).then(() => self.skipWaiting()));
+  e.waitUntil(caches.open(SHELL)
+    .then((c) => c.addAll(SHELL_FILES.map((f) => new Request(f, { cache: "reload" }))))
+    .then(() => self.skipWaiting()));
 });
 
 self.addEventListener("activate", (e) => {
@@ -49,7 +51,7 @@ async function shellNetworkFirst(req) {
   // Pages are cached by path (so /kiosk.html and / each come back offline as themselves).
   const key = req.mode === "navigate" ? new URL(req.url).pathname : req;
   try {
-    const res = await fetch(req);
+    const res = await fetch(req, { cache: "no-cache" });  // always check the server, not the phone's HTTP cache
     if (res.ok && !res.redirected) (await caches.open(SHELL)).put(key, res.clone());
     return res;
   } catch {
