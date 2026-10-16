@@ -126,3 +126,19 @@ def test_onshore_contractors_seeded_without_leave_and_set_leave(tmp_path):
     assert seed_staff(str(p)) == 0  # re-seeding keeps the admin's choice
     with SessionLocal() as db:
         assert db.get(Staff, "AB0022").has_leave is False
+
+
+def test_set_pin_lifts_lockout():
+    from datetime import UTC, datetime, timedelta
+
+    from app.cli import main
+    from tests.conftest import add_staff
+    add_staff("AB0010", None)
+    with SessionLocal() as db:
+        s = db.get(Staff, "AB0010")
+        s.pin_failed, s.pin_locked_until = 5, datetime.now(UTC) + timedelta(minutes=15)
+        db.commit()
+    assert main(["set-pin", "AB0010"]) == 0
+    with SessionLocal() as db:
+        s = db.get(Staff, "AB0010")
+        assert s.pin_failed == 0 and s.pin_locked_until is None and s.pin_hash

@@ -217,6 +217,7 @@ def set_pin(staff_id: str, choose: bool) -> int:
         else:
             pin = generate_pin(db)
         staff.pin_hash = hash_pin(pin)
+        staff.pin_failed, staff.pin_locked_until = 0, None  # a new PIN also lifts any wrong-PIN lockout
         db.commit()
         print(f"PIN for {staff.name} ({staff.staff_id}) updated." + ("" if choose else f" New PIN: {pin}"))
     return 0
