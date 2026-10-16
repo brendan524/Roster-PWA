@@ -21,6 +21,7 @@ router = APIRouter(prefix="/api", tags=["expenses"])
 
 CATEGORIES = {"parking": "Parking / tolls", "travel": "Accommodation & meals (travel)",
               "equipment": "Equipment / supplies", "other": "Other"}
+LABELS = CATEGORIES | {"incentive": "Incentive"}
 MAX_AGE_DAYS = 90
 MAX_AMOUNT = Decimal("10000")
 
@@ -49,8 +50,8 @@ def _files(db: Session, ids: list[int]) -> dict[int, list[dict]]:
 
 def claim_out(c: ExpenseClaim, names: dict[str, str], files: dict[int, list[dict]]) -> dict:
     return {"id": c.id, "staff_id": c.staff_id, "name": names.get(c.staff_id, c.staff_id),
-            "expense_date": c.expense_date.isoformat(), "category": c.category,
-            "category_label": CATEGORIES.get(c.category, c.category), "amount": float(c.amount),
+            "expense_date": c.expense_date.isoformat(), "category": c.category, "kind": c.kind, "client": c.client,
+            "category_label": LABELS.get(c.category, c.category), "amount": float(c.amount),
             "currency": c.currency, "amount_text": money(c.amount, c.currency), "description": c.description,
             "status": c.status, "created_at": c.created_at.isoformat() if c.created_at else None,
             "decided_by": names.get(c.decided_by, c.decided_by) if c.decided_by else None,
@@ -71,6 +72,7 @@ def my_expenses(staff: Staff = Depends(ready_staff), db: Session = Depends(get_d
     return {"today": today().isoformat(), "currency": currency_for(staff), "max_age_days": MAX_AGE_DAYS,
             "categories": [{"code": k, "label": v} for k, v in CATEGORIES.items()],
             "can_approve": staff.staff_id in approvers(),
+            "incentives": staff.location_type == "offshore",
             "claims": [claim_out(c, names, files) for c in claims]}
 
 
@@ -79,14 +81,20 @@ class ClaimIn(BaseModel):
     category: str
     amount: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
     description: str = Field("", max_length=500)
+    client: str = Field("", max_length=200)
 
 
 @router.post("/expenses")
 def submit(body: ClaimIn, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db)):
-    if body.category not in CATEGORIES:
+    incentive = body.category == "incentive"
+    if incentive and staff.location_type != "offshore":
+        raise HTTPException(403, "Incentives are claimed by offshore staff.")
+    if not incentive and body.category not in CATEGORIES:
         raise HTTPException(400, "Choose a category.")
+    if incentive and len(body.client.strip()) < 2:
+        raise HTTPException(400, "Which client was it for?")
     if len(body.description.strip()) < 3:
-        raise HTTPException(400, "Please say what it was for.")
+        raise HTTPException(400, "Please describe the incentive and why." if incentive else "Please say what it was for.")
     if body.amount > MAX_AMOUNT:
         raise HTTPException(400, f"That's more than {money(MAX_AMOUNT, currency_for(staff))} — talk to Brendan.")
     if body.expense_date > today():
@@ -94,16 +102,20 @@ def submit(body: ClaimIn, staff: Staff = Depends(ready_staff), db: Session = Dep
     if body.expense_date < today() - timedelta(days=MAX_AGE_DAYS):
         raise HTTPException(400, f"Claims must be made within {MAX_AGE_DAYS} days.")
     c = ExpenseClaim(staff_id=staff.staff_id, expense_date=body.expense_date, category=body.category,
+                     kind="incentive" if incentive else "expense", client=body.client.strip(),
                      amount=body.amount, currency=currency_for(staff), description=body.description.strip(),
                      status="pending")
     db.add(c)
     db.flush()
+    what = "Incentive claim" if incentive else "Expense claim"
     for a in db.query(Staff).filter(Staff.staff_id.in_(approvers())):
         if a.email and a.staff_id != staff.staff_id:
-            mailer.queue(db, a.email, f"Expense claim: {staff.name} — {money(c.amount, c.currency)}",
+            mailer.queue(db, a.email, f"{what}: {staff.name} — {money(c.amount, c.currency)}",
                          f"{staff.name} ({staff.staff_id}) has claimed {money(c.amount, c.currency)}:\n\n"
-                         f"  {CATEGORIES[c.category]}, {c.expense_date:%a %-d %b %Y}\n  {c.description}\n\n"
-                         "Check the receipt and approve or decline it in the staff app (Leave → Expenses).")
+                         + (f"  Incentive for client: {c.client}\n  {c.description}\n  Date: {c.expense_date:%a %-d %b %Y}\n\n"
+                            "Approve or decline it in the staff app (Leave → Expenses)." if incentive else
+                            f"  {CATEGORIES[c.category]}, {c.expense_date:%a %-d %b %Y}\n  {c.description}\n\n"
+                            "Check the receipt and approve or decline it in the staff app (Leave → Expenses)."))
     db.commit()
     return claim_out(c, _names(db), {})
 
@@ -205,7 +217,7 @@ def decide(claim_id: int, body: DecideIn, admin: Staff = Depends(admin_staff), d
         raise HTTPException(409, f"This claim was already {c.status}.")
     if c.staff_id == admin.staff_id:
         raise HTTPException(403, "You can't approve your own claim.")
-    if body.decision == "approve" and not db.query(ExpenseAttachment).filter_by(claim_id=c.id).count():
+    if body.decision == "approve" and c.kind == "expense" and not db.query(ExpenseAttachment).filter_by(claim_id=c.id).count():
         raise HTTPException(409, "There's no receipt attached yet.")
     if body.decision == "decline" and len(body.note.strip()) < 3:
         raise HTTPException(400, "Please give a reason for declining.")
@@ -213,9 +225,10 @@ def decide(claim_id: int, body: DecideIn, admin: Staff = Depends(admin_staff), d
     c.decided_by, c.decided_at, c.decision_note = admin.staff_id, datetime.now(UTC), body.note.strip()
     staff = db.get(Staff, c.staff_id)
     word = "approved" if c.status == "approved" else "declined"
-    mailer.queue(db, staff.email, f"Your expense claim was {word}",
+    what = f"incentive for {c.client}" if c.kind == "incentive" else f"{CATEGORIES[c.category].lower()}, {c.expense_date:%a %-d %b}"
+    mailer.queue(db, staff.email, f"Your {c.kind} claim was {word}",
                  f"Hi {staff.name.split()[0]},\n\n{admin.name} {word} your claim for {money(c.amount, c.currency)} "
-                 f"({CATEGORIES[c.category].lower()}, {c.expense_date:%a %-d %b})."
+                 f"({what})."
                  + ("\n\nIt will be paid with your next pay." if c.status == "approved" else "")
                  + (f"\n\nNote: {c.decision_note}" if c.decision_note else ""))
     db.commit()

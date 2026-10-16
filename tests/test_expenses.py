@@ -37,9 +37,9 @@ def setup(client, source, monkeypatch):
     return client
 
 
-def claim(client, **kw):
+def claim(http, **kw):
     body = {"expense_date": "2026-10-12", "category": "parking", "amount": "18.50", "description": "Parking at Acme"} | kw
-    return client.post("/api/expenses", json=body)
+    return http.post("/api/expenses", json=body)
 
 
 def upload(client, cid, data=JPG):
@@ -124,9 +124,35 @@ def test_offshore_in_pesos_and_paid_once_in_pay_report(setup):
         by = {p["staff_id"]: p for p in rep["people"]}
         assert {i["item"]: i["qty"] for i in by["AB0016"]["items"]} == {"Reimbursement": 18.5}
         assert {i["item"]: i["qty"] for i in by["AB0003"]["items"]} == {"Reimbursement (PHP)": 1500.0, "Days worked": 0}
-        assert "Expense: Mon 12 Oct: $18.50 — Parking at Acme" in payreport.email_text(rep)
+        assert "Claim: Mon 12 Oct: $18.50 — Parking at Acme" in payreport.email_text(rep)
         send(db, rep, now)
         db.commit()
         assert db.get(ExpenseClaim, cid).paid_in_period == date(2026, 10, 18)
         nxt = payreport.build(db, service, date(2026, 11, 1), now=now + timedelta(days=14))
     assert "AB0016" not in {p["staff_id"] for p in nxt["people"]}  # not paid twice
+
+
+def test_offshore_incentive_claims(setup):
+    c = setup
+    login(c, "AB0016")  # onshore: no incentives
+    assert claim(c, category="incentive", client="Acme", description="Retained").status_code == 403
+    assert c.get("/api/expenses/me").json()["incentives"] is False
+    c.post("/api/auth/logout")
+    login(c, "AB0003")
+    assert c.get("/api/expenses/me").json()["incentives"] is True
+    assert claim(c, category="incentive", client="", description="Retained client").status_code == 400
+    r = claim(c, category="incentive", client="Acme Gym", amount="2000", description="Client renewed for 12 months")
+    assert r.status_code == 200 and r.json()["kind"] == "incentive" and r.json()["amount_text"] == "₱2,000.00"
+    with SessionLocal() as db:
+        m = db.query(EmailOutbox).filter(EmailOutbox.subject.startswith("Incentive claim")).one()
+        assert "client: Acme Gym" in m.body
+    c.post("/api/auth/logout")
+    login(c, "AB0001")
+    d = c.post(f"/api/admin/expenses/{r.json()['id']}/decide", json={"decision": "approve"})  # no receipt needed
+    assert d.status_code == 200
+    service = app.dependency_overrides[get_roster_service]()
+    with SessionLocal() as db:
+        rep = payreport.build(db, service, date(2026, 10, 18), now=datetime(2026, 10, 19, 6, tzinfo=UTC))
+    p = next(p for p in rep["people"] if p["staff_id"] == "AB0003")
+    assert {i["item"]: i["qty"] for i in p["items"]}["Incentive (PHP)"] == 2000.0
+    assert "Incentive, Acme Gym: Client renewed for 12 months" in payreport.email_text(rep)

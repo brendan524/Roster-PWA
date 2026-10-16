@@ -50,7 +50,7 @@ MILESTONE = 800
 CASUAL_HOURS, ORDINARY_HOURS, PH_HOURS, OVERTIME = "Casual Ordinary Hours", "Ordinary Hours", "Public Holiday Hours", "Overtime"
 TEACHING, NON_TEACHING, VEHICLE = "Sessional Teaching", "Non-Teaching Duties", "Vehicle Allowance (cents per KM)"
 FIRST_AID_ALLOW, LAUNDRY, BROKEN, FARES = "First Aid Allowance", "Laundry Allowance", "Broken Shift Allowance", "Excess Fares Allowance"
-REIMBURSE = "Reimbursement"
+REIMBURSE, INCENTIVE = "Reimbursement", "Incentive"
 
 
 # ---- periods -----------------------------------------------------------------------
@@ -361,11 +361,13 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
         if st is None or (c.paid_in_period is None and c.decided_at and c.decided_at.astimezone(tz).date() > end + timedelta(days=1)):
             continue  # approved after this report was due: goes in the next one
         pr = person(c.staff_id, st.name)
-        item = REIMBURSE if c.currency == "AUD" else f"{REIMBURSE} ({c.currency})"
+        base = INCENTIVE if c.kind == "incentive" else REIMBURSE
+        item = base if c.currency == "AUD" else f"{base} ({c.currency})"
         pr.add(item, float(c.amount))
         pr.expense_ids.append(c.id)
         sym = "₱" if c.currency == "PHP" else "$"
-        pr.expenses.append(f"{c.expense_date:%a %-d %b}: {sym}{float(c.amount):,.2f} — {c.description}")
+        what = f"Incentive, {c.client}: {c.description}" if c.kind == "incentive" else c.description
+        pr.expenses.append(f"{c.expense_date:%a %-d %b}: {sym}{float(c.amount):,.2f} — {what}")
 
     # Approved leave in the period
     for r in db.query(LeaveRequest).filter(LeaveRequest.status == "approved", LeaveRequest.start_date <= end,
@@ -385,7 +387,7 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
 
     for pr in people.values():
         if pr.employment == "salaried":
-            pr.items = {k: v for k, v in pr.items.items() if k.startswith(REIMBURSE)}
+            pr.items = {k: v for k, v in pr.items.items() if k.startswith((REIMBURSE, INCENTIVE))}
             worked = {row["date"] for row in pr.shifts if row.get("clock_in") or row.get("clock_out")}
             pr.items["Days worked"] = len(worked)
 
@@ -463,7 +465,7 @@ def email_text(rep: dict) -> str:
                 if not p["items"]:
                     lines.append("  Nothing to pay this period")
             for ex in p.get("expenses", []):
-                lines.append(f"  Expense: {ex}")
+                lines.append(f"  Claim: {ex}")
             for lv in p["leave"]:
                 lines.append(f"  Leave: {lv}")
             for f in p["flags"]:

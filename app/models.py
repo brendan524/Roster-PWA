@@ -332,7 +332,9 @@ class ExpenseClaim(Base):
     id: Mapped[int] = mapped_column(Integer, primary_key=True)
     staff_id: Mapped[str] = mapped_column(ForeignKey("staff.staff_id", ondelete="CASCADE"), index=True)
     expense_date: Mapped[date] = mapped_column(Date)
-    category: Mapped[str] = mapped_column(String(20))  # parking | travel | equipment | other
+    kind: Mapped[str] = mapped_column(String(10), default="expense")  # expense | incentive (offshore staff)
+    category: Mapped[str] = mapped_column(String(20))  # parking | travel | equipment | other | incentive
+    client: Mapped[str] = mapped_column(String(200), default="")  # incentives: the client it was for
     amount: Mapped[float] = mapped_column(Numeric(10, 2))
     currency: Mapped[str] = mapped_column(String(3))  # AUD | PHP
     description: Mapped[str] = mapped_column(String(500))

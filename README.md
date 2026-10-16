@@ -314,6 +314,10 @@ each claim; other admins can see them. Nobody approves their own. Approved claim
 **Reimbursement** for that person and are marked paid once that fortnight's report goes out, so they're never
 paid twice.
 
+**Incentives (offshore staff):** their tab is called **Claims** and also has **Claim an incentive** — client,
+incentive and reason, amount in pesos, date achieved, optional evidence. Brendan approves (no receipt needed);
+approved incentives go into the pay report as **Incentive (PHP)**, separate from reimbursements.
+
 ## Still to do
 
 - **Onboarding new staff** — an admin screen (possibly on the kiosk) to add a new employee: details,

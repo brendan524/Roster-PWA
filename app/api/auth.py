@@ -43,6 +43,7 @@ def me_payload(staff: Staff) -> dict:
         "must_change_password": staff.must_change_password,
         "has_leave": staff.has_leave,
         "email": staff.email,
+        "location_type": staff.location_type,
     }
 
 

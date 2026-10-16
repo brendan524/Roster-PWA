@@ -282,8 +282,9 @@ function renderTabbar() {
     + (state.expensesAdmin && state.expensesAdmin.can_approve ? state.expensesAdmin.pending.length : 0);
   if (state.me.role !== "admin") {
     // Contractors take no leave, so they only have their shifts (no tab bar needed).
-    if (state.me.has_leave === false) { tabbar.replaceChildren(tab("mine", "My shifts"), tab("expenses", "Expenses")); return; }
-    tabbar.replaceChildren(tab("mine", "My shifts"), tab("leave", "Leave"), tab("expenses", "Expenses"));
+    const claimsLabel = state.me.location_type === "offshore" ? "Claims" : "Expenses";
+    if (state.me.has_leave === false) { tabbar.replaceChildren(tab("mine", "My shifts"), tab("expenses", claimsLabel)); return; }
+    tabbar.replaceChildren(tab("mine", "My shifts"), tab("leave", "Leave"), tab("expenses", claimsLabel));
     return;
   }
   tabbar.replaceChildren(
@@ -1025,7 +1026,7 @@ function leaveSwitch() {
 }
 
 function receiptList(c, canRemove) {
-  if (!c.attachments.length) return h("div", { class: "pay-flags" }, "No receipt attached yet");
+  if (!c.attachments.length) return c.kind === "incentive" ? null : h("div", { class: "pay-flags" }, "No receipt attached yet");
   return h("ul", { class: "files" }, c.attachments.map((a) => h("li", {},
     h("a", { href: `/api/expenses/attachments/${a.id}`, target: "_blank", rel: "noopener" }, `🧾 ${a.filename}`),
     h("span", { class: "meta" }, ` ${fmtSize(a.size)}`),
@@ -1062,11 +1063,12 @@ function claimCard(c, { admin = false } = {}) {
     h("div", { class: "row1" }, h("b", {}, admin ? c.name : c.amount_text),
       h("span", { class: `pill ${c.status}` }, STATUS_LABEL[c.status] || c.status)),
     admin ? h("div", {}, h("b", {}, c.amount_text)) : null,
-    h("div", { class: "meta" }, `${c.category_label} · ${fmtDay(c.expense_date)}`),
+    h("div", { class: "meta" }, c.kind === "incentive" ? `Incentive · client: ${c.client} · ${fmtDay(c.expense_date)}`
+      : `${c.category_label} · ${fmtDay(c.expense_date)}`),
     h("div", {}, `“${c.description}”`),
     receiptList(c, mine && c.status === "pending"),
     mine && c.status === "pending" ? h("div", { class: "decide-btns" },
-      h("span", {}, addInput, h("button", { class: "link-btn dark", onclick: () => addInput.click() }, "Add receipt")),
+      h("span", {}, addInput, h("button", { class: "link-btn dark", onclick: () => addInput.click() }, c.kind === "incentive" ? "Add a file" : "Add receipt")),
       h("button", { class: "link-btn dark", onclick: async () => {
         if (!confirm("Cancel this claim?")) return;
         try { await api(`/api/expenses/${c.id}/cancel`, { method: "POST" }); await loadExpenses(); renderExpenses(); }
@@ -1108,10 +1110,46 @@ function expenseForm(X) {
   } },
     h("label", { for: "xd" }, "Date of the expense"), dt,
     h("label", { for: "xc" }, "Category"), cat,
-    h("label", { for: "xa" }, `Amount (${X.currency}, incl. GST)`), amt,
+    h("label", { for: "xa" }, X.currency === "AUD" ? "Amount (AUD, incl. GST)" : `Amount (${X.currency})`), amt,
     h("label", { for: "xdesc" }, "What was it for?"), desc,
     h("label", { for: "xf" }, "Receipt (photo or PDF)"), files,
     h("p", { class: "hint" }, `Within ${X.max_age_days} days of the expense. Up to 10 MB per file.`),
+    err, btn,
+    h("button", { class: "link-btn dark", type: "button", onclick: () => { state.expenseFormOpen = false; renderExpenses(); } }, "Cancel"));
+}
+
+function incentiveForm(X) {
+  const err = h("p", { class: "form-error", hidden: true, role: "alert" });
+  const dt = h("input", { type: "date", id: "id", max: X.today, min: shiftDays(X.today, -X.max_age_days), value: X.today });
+  const client = h("input", { type: "text", id: "ic", maxlength: "200", placeholder: "Client name" });
+  const amt = h("input", { type: "text", id: "ia", inputmode: "decimal", placeholder: "₱ 0.00" });
+  const desc = h("textarea", { id: "idesc", maxlength: "500", rows: "3", placeholder: "e.g. Client renewed for another 12 months / reached the monthly bookings goal" });
+  const files = h("input", { type: "file", id: "if", accept: "application/pdf,image/*", multiple: true });
+  const btn = h("button", { class: "btn", type: "submit" }, "Submit incentive claim");
+  const fail = (m) => { err.textContent = m; err.hidden = false; };
+  return h("form", { class: "card leave-form", onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true;
+    const amount = Number(String(amt.value).replace(/[$₱,\s]/g, ""));
+    if (client.value.trim().length < 2) return fail("Which client was it for?");
+    if (!(amount > 0)) return fail("Enter the amount.");
+    if (desc.value.trim().length < 3) return fail("Please describe the incentive and why.");
+    btn.disabled = true;
+    try {
+      const c = await api("/api/expenses", { method: "POST", body: { expense_date: dt.value, category: "incentive", client: client.value,
+        amount: amount.toFixed(2), description: desc.value } });
+      const errors = [];
+      for (const f of files.files) { try { await uploadFile(c.id, f, "/api/expenses"); } catch (ex) { errors.push(ex.message); } }
+      state.expenseFormOpen = false;
+      state.expenseMsg = errors.length ? `Claim sent, but some files didn't upload: ${errors.join("; ")}` : "Incentive claim sent to Brendan.";
+      await loadExpenses(); renderExpenses();
+    } catch (ex) { fail(ex.message); btn.disabled = false; }
+  } },
+    h("label", { for: "ic" }, "Client"), client,
+    h("label", { for: "idesc" }, "Incentive and reason"), desc,
+    h("label", { for: "ia" }, "Amount (PHP)"), amt,
+    h("label", { for: "id" }, "Date achieved"), dt,
+    h("label", { for: "if" }, "Evidence (optional)"), files,
+    h("p", { class: "hint" }, "e.g. a screenshot of the renewal or the goal report."),
     err, btn,
     h("button", { class: "link-btn dark", type: "button", onclick: () => { state.expenseFormOpen = false; renderExpenses(); } }, "Cancel"));
 }
@@ -1125,14 +1163,16 @@ function renderExpenses() {
   const past = X.claims.filter((c) => !current.includes(c));
   render(
     state.me.role === "admin" ? leaveSwitch() : null,
-    h("div", { class: "page-head" }, h("h1", {}, "Expenses"),
+    h("div", { class: "page-head" }, h("h1", {}, X.incentives ? "Claims" : "Expenses"),
       h("div", { class: "updated" }, h("button", { class: "icon-btn", onclick: async () => { await loadExpenses(); renderExpenses(); } }, "Refresh"))),
     E && E.pending.length ? [h("h2", { class: "month-title" }, E.can_approve ? `Waiting for your approval (${E.pending.length})` : `Waiting for ${E.approver_names.join(", ")} (${E.pending.length})`),
       ...E.pending.map((c) => claimCard(c, { admin: true }))] : null,
     E ? h("h2", { class: "month-title" }, "My claims") : null,
     state.expenseMsg ? h("p", { class: "clock-msg ok", role: "status" }, state.expenseMsg) : null,
-    state.expenseFormOpen ? expenseForm(X)
-      : h("button", { class: "btn", onclick: () => { state.expenseFormOpen = true; state.expenseMsg = null; renderExpenses(); } }, "New expense claim"),
+    state.expenseFormOpen === "incentive" ? incentiveForm(X) : state.expenseFormOpen ? expenseForm(X)
+      : h("div", { class: "claim-btns" },
+        X.incentives ? h("button", { class: "btn", onclick: () => { state.expenseFormOpen = "incentive"; state.expenseMsg = null; renderExpenses(); } }, "Claim an incentive") : null,
+        h("button", { class: X.incentives ? "btn secondary" : "btn", onclick: () => { state.expenseFormOpen = true; state.expenseMsg = null; renderExpenses(); } }, "New expense claim")),
     current.length ? [h("h2", { class: "month-title" }, "Current"), ...current.map((c) => claimCard(c))] : null,
     past.length ? [h("h2", { class: "month-title" }, "Past"), ...past.slice(0, 15).map((c) => claimCard(c))] : null,
     !X.claims.length && !state.expenseFormOpen ? h("p", { class: "hint" }, "Spent your own money on work things (parking, tolls, supplies)? Claim it here with a photo of the receipt.") : null,

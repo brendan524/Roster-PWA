@@ -344,3 +344,6 @@ table.pay-shifts tr.sub td { border-top: 0; color: var(--muted); padding-top: 0;
 div.pay-flags { color: var(--warn); font-size: 14px; margin-top: 4px; }
 .inline-select { display: flex; align-items: center; gap: 8px; font-weight: 400; font-size: 14px; margin: 8px 0 0; } .inline-select select { flex: 1; padding: 8px 10px; }
 .staff-email { display: flex; gap: 8px; align-items: center; margin-top: 8px; } .staff-email input { flex: 1; padding: 8px 10px; font-size: 15px; }
+textarea { width: 100%; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--white); font: inherit; font-size: 16px; resize: vertical; }
+.claim-btns { display: grid; gap: 10px; }
+.claim-btns .btn { margin-top: 0; }
