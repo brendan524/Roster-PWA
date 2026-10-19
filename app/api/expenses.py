@@ -2,6 +2,7 @@
 Approved claims are paid through the next pay report."""
 
 import hashlib
+import json
 from datetime import UTC, date, datetime, timedelta
 from decimal import Decimal
 
@@ -22,6 +23,12 @@ router = APIRouter(prefix="/api", tags=["expenses"])
 CATEGORIES = {"parking": "Parking / tolls", "travel": "Accommodation & meals (travel)",
               "equipment": "Equipment / supplies", "other": "Other"}
 LABELS = CATEGORIES | {"incentive": "Incentive"}
+INCENTIVE_TYPES = {"monthly": "Monthly incentive", "retention": "Client retention", "other": "Other incentive"}
+# Columns of the monthly incentive table (as the team's booking sheet).
+BOOKING_COLUMNS = ["Booking Date", "Time", "Organization", "Course", "Participants", "Trainer", "Invoice Amount",
+                   "Blue", "TD Portal", "Booking Spreadsheet", "Invoice Status"]
+LINK_COLUMNS = {"Blue", "TD Portal", "Booking Spreadsheet"}
+MAX_ROWS = 200
 MAX_AGE_DAYS = 90
 MAX_AMOUNT = Decimal("10000")
 
@@ -51,6 +58,8 @@ def _files(db: Session, ids: list[int]) -> dict[int, list[dict]]:
 def claim_out(c: ExpenseClaim, names: dict[str, str], files: dict[int, list[dict]]) -> dict:
     return {"id": c.id, "staff_id": c.staff_id, "name": names.get(c.staff_id, c.staff_id),
             "expense_date": c.expense_date.isoformat(), "category": c.category, "kind": c.kind, "client": c.client,
+            "incentive_type": c.incentive_type, "incentive_label": INCENTIVE_TYPES.get(c.incentive_type, "Incentive"),
+            "rows": json.loads(c.details) if c.details else [],
             "category_label": LABELS.get(c.category, c.category), "amount": float(c.amount),
             "currency": c.currency, "amount_text": money(c.amount, c.currency), "description": c.description,
             "status": c.status, "created_at": c.created_at.isoformat() if c.created_at else None,
@@ -70,6 +79,8 @@ def my_expenses(staff: Staff = Depends(ready_staff), db: Session = Depends(get_d
               .order_by(ExpenseClaim.expense_date.desc(), ExpenseClaim.id.desc()).limit(50).all())
     names, files = _names(db), _files(db, [x.id for x in claims])
     return {"today": today().isoformat(), "currency": currency_for(staff), "max_age_days": MAX_AGE_DAYS,
+            "incentive_types": [{"code": k, "label": v} for k, v in INCENTIVE_TYPES.items()],
+            "booking_columns": BOOKING_COLUMNS, "link_columns": sorted(LINK_COLUMNS),
             "categories": [{"code": k, "label": v} for k, v in CATEGORIES.items()],
             "can_approve": staff.staff_id in approvers(),
             "incentives": staff.location_type == "offshore",
@@ -82,6 +93,33 @@ class ClaimIn(BaseModel):
     amount: Decimal = Field(gt=0, max_digits=10, decimal_places=2)
     description: str = Field("", max_length=500)
     client: str = Field("", max_length=200)
+    incentive_type: str = ""
+    rows: list[dict[str, str]] = Field(default_factory=list, max_length=MAX_ROWS)
+
+
+def clean_rows(rows: list[dict[str, str]]) -> list[dict[str, str]]:
+    out = []
+    for r in rows:
+        row = {}
+        for col in BOOKING_COLUMNS:
+            v = " ".join(str(r.get(col, "") or "").split())[:300]
+            if col in LINK_COLUMNS and v and v.lower().startswith(("javascript:", "data:")):
+                v = ""  # only plain text or http(s) links
+            row[col] = v
+        if any(row.values()):
+            out.append(row)
+    return out
+
+
+def rows_text(rows: list[dict[str, str]]) -> str:
+    lines = []
+    for r in rows:
+        main = " · ".join(v for v in (r["Booking Date"], r["Time"], r["Organization"], r["Course"],
+                                      f"{r['Participants']} participants" if r["Participants"] else "",
+                                      r["Trainer"], r["Invoice Amount"], r["Invoice Status"]) if v)
+        links = [f"{c}: {r[c]}" for c in ("Blue", "TD Portal", "Booking Spreadsheet") if r[c].lower().startswith("http")]
+        lines.append("  • " + main + ("".join(f"\n      {l}" for l in links)))
+    return "\n".join(lines)
 
 
 @router.post("/expenses")
@@ -91,9 +129,16 @@ def submit(body: ClaimIn, staff: Staff = Depends(ready_staff), db: Session = Dep
         raise HTTPException(403, "Incentives are claimed by offshore staff.")
     if not incentive and body.category not in CATEGORIES:
         raise HTTPException(400, "Choose a category.")
-    if incentive and len(body.client.strip()) < 2:
-        raise HTTPException(400, "Which client was it for?")
-    if len(body.description.strip()) < 3:
+    rows = clean_rows(body.rows) if incentive and body.incentive_type == "monthly" else []
+    if incentive:
+        if body.incentive_type not in INCENTIVE_TYPES:
+            raise HTTPException(400, "Choose the type of incentive.")
+        if body.incentive_type == "monthly":
+            if not rows:
+                raise HTTPException(400, "Add the bookings for this incentive (paste them from your sheet).")
+        elif len(body.client.strip()) < 2:
+            raise HTTPException(400, "Which client was it for?")
+    if not (incentive and body.incentive_type == "monthly") and len(body.description.strip()) < 3:
         raise HTTPException(400, "Please describe the incentive and why." if incentive else "Please say what it was for.")
     if body.amount > MAX_AMOUNT:
         raise HTTPException(400, f"That's more than {money(MAX_AMOUNT, currency_for(staff))} — talk to Brendan.")
@@ -103,6 +148,8 @@ def submit(body: ClaimIn, staff: Staff = Depends(ready_staff), db: Session = Dep
         raise HTTPException(400, f"Claims must be made within {MAX_AGE_DAYS} days.")
     c = ExpenseClaim(staff_id=staff.staff_id, expense_date=body.expense_date, category=body.category,
                      kind="incentive" if incentive else "expense", client=body.client.strip(),
+                     incentive_type=body.incentive_type if incentive else "",
+                     details=json.dumps(rows) if rows else None,
                      amount=body.amount, currency=currency_for(staff), description=body.description.strip(),
                      status="pending")
     db.add(c)
@@ -112,7 +159,12 @@ def submit(body: ClaimIn, staff: Staff = Depends(ready_staff), db: Session = Dep
         if a.email and a.staff_id != staff.staff_id:
             mailer.queue(db, a.email, f"{what}: {staff.name} — {money(c.amount, c.currency)}",
                          f"{staff.name} ({staff.staff_id}) has claimed {money(c.amount, c.currency)}:\n\n"
-                         + (f"  Incentive for client: {c.client}\n  {c.description}\n  Date: {c.expense_date:%a %-d %b %Y}\n\n"
+                         + (f"  Monthly incentive, {c.expense_date:%B %Y} — {len(rows)} booking(s):\n{rows_text(rows)}\n"
+                            + (f"\n  Note: {c.description}\n" if c.description else "")
+                            + "\nApprove or decline it in the staff app (Leave → Expenses)."
+                            if incentive and c.incentive_type == "monthly" else
+                            f"  {INCENTIVE_TYPES[c.incentive_type]} — client: {c.client}\n  {c.description}\n"
+                            f"  Date: {c.expense_date:%a %-d %b %Y}\n\n"
                             "Approve or decline it in the staff app (Leave → Expenses)." if incentive else
                             f"  {CATEGORIES[c.category]}, {c.expense_date:%a %-d %b %Y}\n  {c.description}\n\n"
                             "Check the receipt and approve or decline it in the staff app (Leave → Expenses)."))
@@ -225,7 +277,9 @@ def decide(claim_id: int, body: DecideIn, admin: Staff = Depends(admin_staff), d
     c.decided_by, c.decided_at, c.decision_note = admin.staff_id, datetime.now(UTC), body.note.strip()
     staff = db.get(Staff, c.staff_id)
     word = "approved" if c.status == "approved" else "declined"
-    what = f"incentive for {c.client}" if c.kind == "incentive" else f"{CATEGORIES[c.category].lower()}, {c.expense_date:%a %-d %b}"
+    what = (f"monthly incentive, {c.expense_date:%B %Y}" if c.incentive_type == "monthly"
+            else f"incentive for {c.client}" if c.kind == "incentive"
+            else f"{CATEGORIES[c.category].lower()}, {c.expense_date:%a %-d %b}")
     mailer.queue(db, staff.email, f"Your {c.kind} claim was {word}",
                  f"Hi {staff.name.split()[0]},\n\n{admin.name} {word} your claim for {money(c.amount, c.currency)} "
                  f"({what})."

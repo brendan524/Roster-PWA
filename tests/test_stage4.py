@@ -45,6 +45,7 @@ def email_on(monkeypatch):
     monkeypatch.setattr(s, "smtp_user", "hr@abgroup.au")
     monkeypatch.setattr(s, "smtp_password", "app-password")
     monkeypatch.setattr(s, "alert_email", "brendan@example.com")
+    monkeypatch.setattr(s, "pay_report_hour", -1)  # these tests aren't about the Monday pay report
     return s
 
 

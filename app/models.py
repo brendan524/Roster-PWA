@@ -335,6 +335,8 @@ class ExpenseClaim(Base):
     kind: Mapped[str] = mapped_column(String(10), default="expense")  # expense | incentive (offshore staff)
     category: Mapped[str] = mapped_column(String(20))  # parking | travel | equipment | other | incentive
     client: Mapped[str] = mapped_column(String(200), default="")  # incentives: the client it was for
+    incentive_type: Mapped[str] = mapped_column(String(20), default="")  # monthly | retention | other
+    details: Mapped[str | None] = mapped_column(String)  # monthly incentives: JSON list of booking rows
     amount: Mapped[float] = mapped_column(Numeric(10, 2))
     currency: Mapped[str] = mapped_column(String(3))  # AUD | PHP
     description: Mapped[str] = mapped_column(String(500))

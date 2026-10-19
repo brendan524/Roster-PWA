@@ -369,7 +369,13 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
         pr.add(item, float(c.amount))
         pr.expense_ids.append(c.id)
         sym = "₱" if c.currency == "PHP" else "$"
-        what = f"Incentive, {c.client}: {c.description}" if c.kind == "incentive" else c.description
+        if c.kind == "incentive" and c.incentive_type == "monthly":
+            n = len(json.loads(c.details)) if c.details else 0
+            what = f"Monthly incentive, {c.expense_date:%B %Y} ({n} booking{'s' if n != 1 else ''})"
+        elif c.kind == "incentive":
+            what = f"Incentive, {c.client}: {c.description}"
+        else:
+            what = c.description
         pr.expenses.append(f"{c.expense_date:%a %-d %b}: {sym}{float(c.amount):,.2f} — {what}")
 
     # Approved leave in the period

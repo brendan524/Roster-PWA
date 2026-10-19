@@ -347,3 +347,9 @@ div.pay-flags { color: var(--warn); font-size: 14px; margin-top: 4px; }
 textarea { width: 100%; padding: 12px 14px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--white); font: inherit; font-size: 16px; resize: vertical; }
 .claim-btns { display: grid; gap: 10px; }
 .claim-btns .btn { margin-top: 0; }
+.table-scroll { overflow-x: auto; margin: 8px 0; -webkit-overflow-scrolling: touch; }
+table.bookings { border-collapse: collapse; font-size: 13px; min-width: 100%; }
+table.bookings th { text-align: left; white-space: nowrap; color: var(--muted); padding: 4px 6px; border-bottom: 1px solid var(--line); }
+table.bookings td { padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+table.bookings td input { width: 130px; padding: 6px 8px; font-size: 14px; border: 1px solid var(--line); border-radius: 6px; }
+table.bookings a { color: var(--blue-dark); font-weight: 700; }

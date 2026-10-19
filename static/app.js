@@ -61,7 +61,7 @@ function h(tag, attrs, ...children) {
     else if (v === true) el.setAttribute(k, "");
     else el.setAttribute(k, v);
   }
-  for (const c of children.flat()) {
+  for (const c of children.flat(Infinity)) {
     if (c == null || c === false) continue;
     el.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
@@ -1063,9 +1063,12 @@ function claimCard(c, { admin = false } = {}) {
     h("div", { class: "row1" }, h("b", {}, admin ? c.name : c.amount_text),
       h("span", { class: `pill ${c.status}` }, STATUS_LABEL[c.status] || c.status)),
     admin ? h("div", {}, h("b", {}, c.amount_text)) : null,
-    h("div", { class: "meta" }, c.kind === "incentive" ? `Incentive · client: ${c.client} · ${fmtDay(c.expense_date)}`
+    h("div", { class: "meta" }, c.incentive_type === "monthly"
+      ? `${c.incentive_label} · ${new Date(c.expense_date + "T00:00").toLocaleDateString("en-AU", { month: "long", year: "numeric" })} · ${c.rows.length} booking${c.rows.length === 1 ? "" : "s"}`
+      : c.kind === "incentive" ? `${c.incentive_label} · client: ${c.client} · ${fmtDay(c.expense_date)}`
       : `${c.category_label} · ${fmtDay(c.expense_date)}`),
-    h("div", {}, `“${c.description}”`),
+    c.rows && c.rows.length ? bookingTable(Object.keys(c.rows[0]), c.rows, { links: ["Blue", "TD Portal", "Booking Spreadsheet"] }) : null,
+    c.description ? h("div", {}, `“${c.description}”`) : null,
     receiptList(c, mine && c.status === "pending"),
     mine && c.status === "pending" ? h("div", { class: "decide-btns" },
       h("span", {}, addInput, h("button", { class: "link-btn dark", onclick: () => addInput.click() }, c.kind === "incentive" ? "Add a file" : "Add receipt")),
@@ -1118,40 +1121,114 @@ function expenseForm(X) {
     h("button", { class: "link-btn dark", type: "button", onclick: () => { state.expenseFormOpen = false; renderExpenses(); } }, "Cancel"));
 }
 
+// Paste from the booking sheet: tab-separated rows (copied from Sheets/Excel), or one cell per line.
+function parseBookings(text, cols) {
+  const out = { rows: [], total: null };
+  const totalRe = /total\s*amount\s*:?\s*(?:php|₱)?\s*([\d,]+(?:\.\d+)?)/i;
+  const headers = new Set(cols.map((c) => c.toLowerCase()).concat(["total number of participants"]));
+  const lines = [];
+  for (const raw of text.split(/\r?\n/)) {
+    const m = raw.match(totalRe);
+    if (m) { out.total = Number(m[1].replace(/,/g, "")); continue; }
+    if (!raw.trim() || /booking\s*date/i.test(raw)) continue;  // blank or the header row
+    lines.push(raw);
+  }
+  const tabbed = lines.filter((l) => (l.match(/\t/g) || []).length >= 2).length;
+  if (tabbed && tabbed >= lines.length / 2) {  // copied straight from a sheet: one row per line
+    for (const l of lines) {
+      const cells = l.split("\t").map((c) => c.trim());
+      out.rows.push(Object.fromEntries(cols.map((c, i) => [c, cells[i] || ""])));
+    }
+  } else {  // one cell per line
+    const cells = lines.map((l) => l.trim()).filter((c) => !headers.has(c.toLowerCase()));
+    for (let i = 0; i < cells.length; i += cols.length) {
+      out.rows.push(Object.fromEntries(cols.map((c, j) => [c, cells[i + j] || ""])));
+    }
+  }
+  return out;
+}
+
+function bookingTable(cols, rows, { editable = false, links = [], onChange } = {}) {
+  const isLink = (v) => /^https?:\/\//i.test(v || "");
+  return h("div", { class: "table-scroll" }, h("table", { class: "bookings" },
+    h("tr", {}, cols.map((c) => h("th", {}, c)), editable ? h("th", {}, "") : null),
+    rows.map((r, i) => h("tr", {},
+      cols.map((c) => h("td", {}, editable
+        ? h("input", { type: "text", value: r[c] || "", "aria-label": `${c} row ${i + 1}`,
+          placeholder: links.includes(c) ? "https://…" : "", oninput: (e) => { r[c] = e.target.value; } })
+        : (isLink(r[c]) ? h("a", { href: r[c], target: "_blank", rel: "noopener noreferrer" }, links.includes(c) ? "Open ↗" : r[c]) : (r[c] || "")))),
+      editable ? h("td", {}, h("button", { type: "button", class: "link-btn dark small", "aria-label": `Remove row ${i + 1}`,
+        onclick: () => { rows.splice(i, 1); onChange(); } }, "✕")) : null))));
+}
+
 function incentiveForm(X) {
+  const f = state.incentiveDraft || (state.incentiveDraft = { type: "monthly", rows: [], month: X.today.slice(0, 7), client: "", desc: "", amount: "" });
+  const rerender = () => renderExpenses();
   const err = h("p", { class: "form-error", hidden: true, role: "alert" });
-  const dt = h("input", { type: "date", id: "id", max: X.today, min: shiftDays(X.today, -X.max_age_days), value: X.today });
-  const client = h("input", { type: "text", id: "ic", maxlength: "200", placeholder: "Client name" });
-  const amt = h("input", { type: "text", id: "ia", inputmode: "decimal", placeholder: "₱ 0.00" });
-  const desc = h("textarea", { id: "idesc", maxlength: "500", rows: "3", placeholder: "e.g. Client renewed for another 12 months / reached the monthly bookings goal" });
+  const fail = (m) => { err.textContent = m; err.hidden = false; };
+  const type = h("select", { id: "it", onchange: (e) => { f.type = e.target.value; rerender(); } },
+    X.incentive_types.map((t) => h("option", { value: t.code, selected: f.type === t.code }, t.label)));
+  const amt = h("input", { type: "text", id: "ia", inputmode: "decimal", placeholder: "₱ 0.00", value: f.amount, oninput: (e) => { f.amount = e.target.value; } });
   const files = h("input", { type: "file", id: "if", accept: "application/pdf,image/*", multiple: true });
   const btn = h("button", { class: "btn", type: "submit" }, "Submit incentive claim");
-  const fail = (m) => { err.textContent = m; err.hidden = false; };
+  let body;
+  if (f.type === "monthly") {
+    const paste = h("textarea", { id: "ip", rows: "4", placeholder: "Paste the table from your booking sheet here (including the Total amount line)" });
+    const month = h("input", { type: "month", id: "im", value: f.month, max: X.today.slice(0, 7), oninput: (e) => { f.month = e.target.value; } });
+    body = [
+      h("label", { for: "im" }, "Month"), month,
+      h("label", { for: "ip" }, "Bookings"), paste,
+      h("div", { class: "decide-btns" },
+        h("button", { type: "button", class: "btn small secondary", onclick: () => {
+          const r = parseBookings(paste.value, X.booking_columns);
+          if (!r.rows.length) return fail("Couldn't read any rows — copy the table from your sheet and paste it again.");
+          f.rows.push(...r.rows); if (r.total && !f.amount) f.amount = String(r.total); err.hidden = true; rerender();
+        } }, "Add from paste"),
+        h("button", { type: "button", class: "btn small secondary", onclick: () => { f.rows.push(Object.fromEntries(X.booking_columns.map((c) => [c, ""]))); rerender(); } }, "Add a row")),
+      f.rows.length ? [h("p", { class: "hint" }, `${f.rows.length} booking${f.rows.length === 1 ? "" : "s"} — tap a cell to fix it; paste links into Blue / TD Portal / Booking Spreadsheet.`),
+        bookingTable(X.booking_columns, f.rows, { editable: true, links: X.link_columns, onChange: rerender })] : null,
+      h("label", { for: "idesc" }, "Note (optional)"),
+      h("textarea", { id: "idesc", maxlength: "500", rows: "2", oninput: (e) => { f.desc = e.target.value; } }, f.desc || ""),
+    ];
+  } else {
+    body = [
+      h("label", { for: "ic" }, "Client"),
+      h("input", { type: "text", id: "ic", maxlength: "200", placeholder: "Client name", value: f.client, oninput: (e) => { f.client = e.target.value; } }),
+      h("label", { for: "idesc" }, "Incentive and reason"),
+      h("textarea", { id: "idesc", maxlength: "500", rows: "3", placeholder: "e.g. Client renewed for another 12 months", oninput: (e) => { f.desc = e.target.value; } }, f.desc || ""),
+    ];
+  }
+  const dt = h("input", { type: "date", id: "id", max: X.today, min: shiftDays(X.today, -X.max_age_days), value: f.date || X.today, oninput: (e) => { f.date = e.target.value; } });
   return h("form", { class: "card leave-form", onsubmit: async (e) => {
     e.preventDefault(); err.hidden = true;
-    const amount = Number(String(amt.value).replace(/[$₱,\s]/g, ""));
-    if (client.value.trim().length < 2) return fail("Which client was it for?");
-    if (!(amount > 0)) return fail("Enter the amount.");
-    if (desc.value.trim().length < 3) return fail("Please describe the incentive and why.");
+    const amount = Number(String(f.amount).replace(/[$₱,\s]|php/gi, ""));
+    if (!(amount > 0)) return fail("Enter the total amount.");
+    const payload = { category: "incentive", incentive_type: f.type, amount: amount.toFixed(2), description: f.desc || "" };
+    if (f.type === "monthly") {
+      if (!f.rows.length) return fail("Add the bookings (paste them from your sheet).");
+      Object.assign(payload, { expense_date: `${f.month}-01`, rows: f.rows });
+    } else {
+      if ((f.client || "").trim().length < 2) return fail("Which client was it for?");
+      if ((f.desc || "").trim().length < 3) return fail("Please describe the incentive and why.");
+      Object.assign(payload, { expense_date: dt.value, client: f.client });
+    }
     btn.disabled = true;
     try {
-      const c = await api("/api/expenses", { method: "POST", body: { expense_date: dt.value, category: "incentive", client: client.value,
-        amount: amount.toFixed(2), description: desc.value } });
+      const c = await api("/api/expenses", { method: "POST", body: payload });
       const errors = [];
-      for (const f of files.files) { try { await uploadFile(c.id, f, "/api/expenses"); } catch (ex) { errors.push(ex.message); } }
-      state.expenseFormOpen = false;
+      for (const fl of files.files) { try { await uploadFile(c.id, fl, "/api/expenses"); } catch (ex) { errors.push(ex.message); } }
+      state.expenseFormOpen = false; state.incentiveDraft = null;
       state.expenseMsg = errors.length ? `Claim sent, but some files didn't upload: ${errors.join("; ")}` : "Incentive claim sent to Brendan.";
       await loadExpenses(); renderExpenses();
     } catch (ex) { fail(ex.message); btn.disabled = false; }
   } },
-    h("label", { for: "ic" }, "Client"), client,
-    h("label", { for: "idesc" }, "Incentive and reason"), desc,
-    h("label", { for: "ia" }, "Amount (PHP)"), amt,
-    h("label", { for: "id" }, "Date achieved"), dt,
+    h("label", { for: "it" }, "Incentive type"), type,
+    body,
+    h("label", { for: "ia" }, "Total amount (PHP)"), amt,
+    f.type === "monthly" ? null : [h("label", { for: "id" }, "Date achieved"), dt],
     h("label", { for: "if" }, "Evidence (optional)"), files,
-    h("p", { class: "hint" }, "e.g. a screenshot of the renewal or the goal report."),
     err, btn,
-    h("button", { class: "link-btn dark", type: "button", onclick: () => { state.expenseFormOpen = false; renderExpenses(); } }, "Cancel"));
+    h("button", { class: "link-btn dark", type: "button", onclick: () => { state.expenseFormOpen = false; state.incentiveDraft = null; renderExpenses(); } }, "Cancel"));
 }
 
 function renderExpenses() {
@@ -1673,6 +1750,7 @@ async function start() {
   state.avail = null; state.adminAvail = null; state.availDateOpen = false; state.availMsg = null; state.availAllClashes = false;
   state.staffList = null; state.staffReveal = null; state.newPin = null; state.pay = null; state.venues = null;
   state.expenses = null; state.expensesAdmin = null; state.expenseFormOpen = false; state.expenseMsg = null; state.leaveView = "leave";
+  state.incentiveDraft = null;
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
   if (xeroReturn && state.me.role === "admin") {

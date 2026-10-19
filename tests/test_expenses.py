@@ -140,8 +140,10 @@ def test_offshore_incentive_claims(setup):
     c.post("/api/auth/logout")
     login(c, "AB0003")
     assert c.get("/api/expenses/me").json()["incentives"] is True
-    assert claim(c, category="incentive", client="", description="Retained client").status_code == 400
-    r = claim(c, category="incentive", client="Acme Gym", amount="2000", description="Client renewed for 12 months")
+    assert claim(c, category="incentive", client="Acme", description="Retained client").status_code == 400  # no type
+    assert claim(c, category="incentive", incentive_type="retention", client="", description="Retained client").status_code == 400
+    r = claim(c, category="incentive", incentive_type="retention", client="Acme Gym", amount="2000",
+              description="Client renewed for 12 months")
     assert r.status_code == 200 and r.json()["kind"] == "incentive" and r.json()["amount_text"] == "₱2,000.00"
     with SessionLocal() as db:
         m = db.query(EmailOutbox).filter(EmailOutbox.subject.startswith("Incentive claim")).one()
@@ -156,3 +158,36 @@ def test_offshore_incentive_claims(setup):
     p = next(p for p in rep["people"] if p["staff_id"] == "AB0003")
     assert {i["item"]: i["qty"] for i in p["items"]}["Incentive (PHP)"] == 2000.0
     assert "Incentive, Acme Gym: Client renewed for 12 months" in payreport.email_text(rep)
+
+
+
+def test_monthly_incentive_with_booking_table(setup):
+    c = setup
+    login(c, "AB0003")
+    rows = [
+        {"Booking Date": "01/09/2026", "Time": "5.00PM", "Organization": "Resolution Drilling", "Course": "FA, CPR",
+         "Participants": "21", "Trainer": "Aaron", "Invoice Amount": "$2650", "Blue": "https://blue.example/1",
+         "TD Portal": "javascript:alert(1)", "Booking Spreadsheet": "Resolution Drilling", "Invoice Status": "Paid"},
+        {"Booking Date": "08/09/2026", "Organization": "The Photo Studio", "Trainer": "Craig", "Invoice Status": "Paid"},
+        {},
+    ]
+    assert claim(c, category="incentive", incentive_type="monthly", amount="3000", expense_date="2026-09-01",
+                 description="", rows=[]).status_code == 400  # needs bookings
+    r = claim(c, category="incentive", incentive_type="monthly", amount="3000", expense_date="2026-09-01",
+              description="", rows=rows)
+    assert r.status_code == 200
+    got = r.json()
+    assert got["incentive_label"] == "Monthly incentive" and len(got["rows"]) == 2  # empty row dropped
+    assert got["rows"][0]["TD Portal"] == "" and got["rows"][0]["Blue"] == "https://blue.example/1"
+    with SessionLocal() as db:
+        m = db.query(EmailOutbox).filter(EmailOutbox.subject.startswith("Incentive claim")).one()
+    assert "Monthly incentive, September 2026 — 2 booking(s)" in m.body
+    assert "Resolution Drilling · FA, CPR · 21 participants · Aaron · $2650 · Paid" in m.body
+    assert "Blue: https://blue.example/1" in m.body and "javascript" not in m.body
+    c.post("/api/auth/logout")
+    login(c, "AB0001")
+    c.post(f"/api/admin/expenses/{got['id']}/decide", json={"decision": "approve"})
+    service = app.dependency_overrides[get_roster_service]()
+    with SessionLocal() as db:
+        rep = payreport.build(db, service, date(2026, 10, 18), now=datetime(2026, 10, 19, 6, tzinfo=UTC))
+    assert "Monthly incentive, September 2026 (2 bookings)" in payreport.email_text(rep)
