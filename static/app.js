@@ -1272,9 +1272,14 @@ function balanceCards(bals) {
 }
 
 function leaveForm(L) {
+  const shortMode = state.leaveFormMode === "short";
+  const types = shortMode ? L.types.filter((t) => t.advance_only) : L.types;
   const avail = Object.fromEntries((L.balances || []).map((b) => [b.code, b.available]));
   const err = h("p", { class: "form-error", hidden: true, role: "alert" });
-  const type = h("select", { id: "lt" }, L.types.map((t) => h("option", { value: t.code }, t.label)));
+  const mode = h("select", { id: "lmode", onchange: (e) => { state.leaveFormMode = e.target.value; renderLeave(); } },
+    h("option", { value: "normal", selected: !shortMode }, "Leave request"),
+    h("option", { value: "short", selected: shortMode }, "Short-notice leave request"));
+  const type = h("select", { id: "lt" }, types.map((t) => h("option", { value: t.code }, t.label)));
   const start = h("input", { type: "date", id: "ls", min: shiftDays(L.today, -60), required: true });
   const end = h("input", { type: "date", id: "le", required: true });
   const sh = h("input", { type: "checkbox", id: "lsh" });
@@ -1289,15 +1294,21 @@ function leaveForm(L) {
   const notice = L.notice_days || 7;
   const earliest = shiftDays(L.today, notice);
   const ack = h("input", { type: "checkbox", id: "lack" });
-  const shortBox = h("div", { class: "short-notice", hidden: true },
-    h("div", {}, h("b", {}, "⚠ Short notice: "), `this starts in less than ${notice} days. You can still ask, but it may not be approved.`),
+  const shortBox = h("div", { class: "short-notice" },
     h("label", { class: "check", for: "lack" }, ack, " I understand this is a short-notice request and may not be approved"));
+  shortBox.hidden = !shortMode;
   const update = () => {
-    const t = L.types.find((x) => x.code === type.value);
-    start.min = t.advance_only ? L.today : shiftDays(L.today, -(L.max_backdate_days || 60));
-    typeHint.textContent = t.advance_only ? `Needs at least ${notice} days' notice — from ${fmtDay(earliest)}. Sooner is a short-notice request.`
-      : "Can be for today or past dates (up to 60 days back), e.g. if you were sick.";
-    shortBox.hidden = !(t.advance_only && start.value && start.value < earliest);
+    const t = types.find((x) => x.code === type.value);
+    if (shortMode) {
+      start.min = L.today; start.max = shiftDays(earliest, -1);
+      typeHint.textContent = `For leave starting between today and ${fmtDay(shiftDays(earliest, -1))}.`;
+    } else {
+      start.min = t.advance_only ? earliest : shiftDays(L.today, -(L.max_backdate_days || 60));
+      start.removeAttribute("max");
+      typeHint.textContent = t.advance_only ? `Needs at least ${notice} days' notice — earliest start ${fmtDay(earliest)}. Need it sooner? Choose "Short-notice leave request" above.`
+        : "Can be for today or past dates (up to 60 days back), e.g. if you were sick.";
+    }
+    if (start.value && (start.value < start.min || (start.max && start.value > start.max))) start.value = "";
     if (start.value && start.value < start.min) start.value = "";
     if (start.value && (!end.value || end.value < start.value)) end.value = start.value;
     end.min = start.value || "";
@@ -1313,12 +1324,12 @@ function leaveForm(L) {
   };
   [type, start, end, sh, eh].forEach((el) => el.addEventListener("change", update));
   update();
-  const btn = h("button", { class: "btn", type: "submit" }, "Send request");
+  const btn = h("button", { class: "btn", type: "submit" }, shortMode ? "Send short-notice request" : "Send request");
   return h("form", {
     class: "card leave-form", onsubmit: async (e) => {
       e.preventDefault(); err.hidden = true;
       if (reason.value.trim().length < 3) { err.textContent = "Please give a reason for your leave."; err.hidden = false; reason.focus(); return; }
-      if (!shortBox.hidden && !ack.checked) { err.textContent = "Tick the box to confirm you understand this short-notice request may not be approved."; err.hidden = false; return; }
+      if (shortMode && !ack.checked) { err.textContent = "Tick the box to confirm you understand this short-notice request may not be approved."; err.hidden = false; return; }
       const big = [...files.files].find((f) => f.size > MAX_FILE_MB * 1024 * 1024);
       if (big) { err.textContent = `${big.name} is over ${MAX_FILE_MB} MB.`; err.hidden = false; return; }
       btn.disabled = true;
@@ -1326,11 +1337,11 @@ function leaveForm(L) {
         const created = await api("/api/leave/requests", { method: "POST", body: {
           leave_type: type.value, start_date: start.value, end_date: end.value,
           start_half: sh.checked, end_half: !ehWrap.hidden && eh.checked, reason: reason.value,
-          short_notice: !shortBox.hidden && ack.checked,
+          short_notice: shortMode && ack.checked,
         } });
         const failed = [];
         for (const f of files.files) { try { await uploadFile(created.id, f); } catch (ex) { failed.push(ex.message); } }
-        state.leaveFormOpen = false;
+        state.leaveFormOpen = false; state.leaveFormMode = "normal";
         state.leaveMsg = failed.length
           ? `Request sent, but a file didn't upload (${failed.join("; ")}). Use "Add a file" on your request below to try again.`
           : "Request sent. You'll see it here once it's approved.";
@@ -1338,6 +1349,9 @@ function leaveForm(L) {
       } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
     },
   },
+    h("label", { for: "lmode" }, "Request type"), mode,
+    shortMode ? h("div", { class: "short-notice" }, h("b", {}, "⚠ Short-notice request"),
+      h("div", {}, `This is for leave starting in less than ${notice} days. You can ask, but it may not be approved — talk to your manager too if it's urgent.`)) : null,
     h("label", { for: "lt" }, "Type of leave"), type, typeHint,
     h("div", { class: "date-row" },
       h("div", {}, h("label", { for: "ls" }, "From"), start),
@@ -1349,7 +1363,7 @@ function leaveForm(L) {
     h("label", { for: "lf" }, "Attachments (optional)"), files,
     h("p", { class: "hint" }, "e.g. a medical certificate. PDF or photo, up to 10 MB each. You can also add files later."),
     preview, err, btn,
-    h("button", { class: "link-btn dark", type: "button", onclick: () => { state.leaveFormOpen = false; renderLeave(); } }, "Cancel"),
+    h("button", { class: "link-btn dark", type: "button", onclick: () => { state.leaveFormOpen = false; state.leaveFormMode = "normal"; renderLeave(); } }, "Cancel"),
   );
 }
 

@@ -5,7 +5,7 @@
      marked with x-ab-offline so the app can say so. Cleared on logout.
    - Everything else under /api (logins, admin data) is never cached. */
 
-const VERSION = "v25";
+const VERSION = "v26";
 const SHELL = `ab-shell-${VERSION}`;
 const DATA = "ab-data"; // personal roster cache; wiped on logout
 const SHELL_FILES = ["/", "/app.css", "/app.js", "/manifest.webmanifest",
