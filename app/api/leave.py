@@ -52,6 +52,7 @@ def _request_out(r: LeaveRequest, staff: Staff | None = None, names: dict[str, s
     return {
         "attachments": (files or {}).get(r.id, []),
         "id": r.id,
+        "short_notice": r.short_notice,
         "staff_id": r.staff_id,
         "name": staff.name if staff else None,
         "leave_type": r.leave_type,
@@ -153,6 +154,7 @@ class LeaveIn(BaseModel):
     start_half: bool = False
     end_half: bool = False
     reason: str = Field("", max_length=500)
+    short_notice: bool = False  # they've acknowledged it's inside the notice period and may not be approved
 
 
 @router.post("/leave/requests")
@@ -168,10 +170,14 @@ def apply_for_leave(body: LeaveIn, staff: Staff = Depends(ready_staff), db: Sess
         raise HTTPException(400, f"One request can cover at most {MAX_REQUEST_DAYS} days. Split it into two.")
     if len(body.reason.strip()) < 3:
         raise HTTPException(400, "Please give a reason for your leave.")
-    if lt.advance_only and body.start_date < today() + timedelta(days=NOTICE_DAYS):
+    short = lt.advance_only and body.start_date < today() + timedelta(days=NOTICE_DAYS)
+    if short and not body.short_notice:
         earliest = today() + timedelta(days=NOTICE_DAYS)
         raise HTTPException(400, f"{lt.label} needs at least {NOTICE_DAYS} days' notice — the earliest start date "
-                                 f"is {earliest:%a %-d %b}. If it's urgent, talk to Brendan or Aaron.")
+                                 f"is {earliest:%a %-d %b}. For anything sooner, tick the short-notice box "
+                                 "(it may not be approved).")
+    if short and body.start_date < today():
+        raise HTTPException(400, f"{lt.label} can't start in the past.")
     if body.start_date < today() - timedelta(days=MAX_BACKDATE_DAYS):
         raise HTTPException(400, f"That's more than {MAX_BACKDATE_DAYS} days ago. Ask an admin to record it.")
     days = count_days(body.start_date, body.end_date, body.start_half, body.end_half)
@@ -192,12 +198,14 @@ def apply_for_leave(body: LeaveIn, staff: Staff = Depends(ready_staff), db: Sess
                                  "Cancel that one first if you need to change it.")
     req = LeaveRequest(staff_id=staff.staff_id, leave_type=lt.code, start_date=body.start_date,
                        end_date=body.end_date, start_half=body.start_half, end_half=body.end_half,
-                       days=days, reason=body.reason.strip(), status="pending")
+                       days=days, reason=body.reason.strip(), status="pending", short_notice=bool(short))
     db.add(req)
     db.flush()
     mailer.queue_admins(
-        db, f"Leave request: {staff.name} — {lt.label.lower()}, {_dates_text(req)}",
-        f"{staff.name} ({staff.staff_id}) has asked for {lt.label.lower()}:\n\n"
+        db, f"{'SHORT NOTICE ' if short else ''}Leave request: {staff.name} — {lt.label.lower()}, {_dates_text(req)}",
+        (f"Short notice: this starts in less than {NOTICE_DAYS} days. {staff.name} has acknowledged it may not be "
+         "approved.\n\n" if short else "")
+        + f"{staff.name} ({staff.staff_id}) has asked for {lt.label.lower()}:\n\n"
         f"  {_dates_text(req)} ({float(days):g} working day{'s' if days != 1 else ''})\n"
         f"  Reason: {req.reason}\n\nApprove or decline it on the Leave tab in the staff app.",
         exclude=staff.staff_id)

@@ -353,3 +353,4 @@ table.bookings th { text-align: left; white-space: nowrap; color: var(--muted); 
 table.bookings td { padding: 4px 6px; border-bottom: 1px solid var(--line); white-space: nowrap; }
 table.bookings td input { width: 130px; padding: 6px 8px; font-size: 14px; border: 1px solid var(--line); border-radius: 6px; }
 table.bookings a { color: var(--blue-dark); font-weight: 700; }
+.short-notice { background: var(--warn-bg); border-left: 5px solid var(--warn); border-radius: 10px; padding: 10px 12px; margin-top: 12px; font-size: 14px; } .short-notice[hidden] { display: none; }

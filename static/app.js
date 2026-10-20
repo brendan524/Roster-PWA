@@ -1288,11 +1288,16 @@ function leaveForm(L) {
   const ehWrap = h("label", { class: "check", for: "leh" }, eh, " Last day is a half day");
   const notice = L.notice_days || 7;
   const earliest = shiftDays(L.today, notice);
+  const ack = h("input", { type: "checkbox", id: "lack" });
+  const shortBox = h("div", { class: "short-notice", hidden: true },
+    h("div", {}, h("b", {}, "⚠ Short notice: "), `this starts in less than ${notice} days. You can still ask, but it may not be approved.`),
+    h("label", { class: "check", for: "lack" }, ack, " I understand this is a short-notice request and may not be approved"));
   const update = () => {
     const t = L.types.find((x) => x.code === type.value);
-    start.min = t.advance_only ? earliest : shiftDays(L.today, -(L.max_backdate_days || 60));
-    typeHint.textContent = t.advance_only ? `Needs at least ${notice} days' notice — earliest start ${fmtDay(earliest)}.`
+    start.min = t.advance_only ? L.today : shiftDays(L.today, -(L.max_backdate_days || 60));
+    typeHint.textContent = t.advance_only ? `Needs at least ${notice} days' notice — from ${fmtDay(earliest)}. Sooner is a short-notice request.`
       : "Can be for today or past dates (up to 60 days back), e.g. if you were sick.";
+    shortBox.hidden = !(t.advance_only && start.value && start.value < earliest);
     if (start.value && start.value < start.min) start.value = "";
     if (start.value && (!end.value || end.value < start.value)) end.value = start.value;
     end.min = start.value || "";
@@ -1313,6 +1318,7 @@ function leaveForm(L) {
     class: "card leave-form", onsubmit: async (e) => {
       e.preventDefault(); err.hidden = true;
       if (reason.value.trim().length < 3) { err.textContent = "Please give a reason for your leave."; err.hidden = false; reason.focus(); return; }
+      if (!shortBox.hidden && !ack.checked) { err.textContent = "Tick the box to confirm you understand this short-notice request may not be approved."; err.hidden = false; return; }
       const big = [...files.files].find((f) => f.size > MAX_FILE_MB * 1024 * 1024);
       if (big) { err.textContent = `${big.name} is over ${MAX_FILE_MB} MB.`; err.hidden = false; return; }
       btn.disabled = true;
@@ -1320,6 +1326,7 @@ function leaveForm(L) {
         const created = await api("/api/leave/requests", { method: "POST", body: {
           leave_type: type.value, start_date: start.value, end_date: end.value,
           start_half: sh.checked, end_half: !ehWrap.hidden && eh.checked, reason: reason.value,
+          short_notice: !shortBox.hidden && ack.checked,
         } });
         const failed = [];
         for (const f of files.files) { try { await uploadFile(created.id, f); } catch (ex) { failed.push(ex.message); } }
@@ -1335,6 +1342,7 @@ function leaveForm(L) {
     h("div", { class: "date-row" },
       h("div", {}, h("label", { for: "ls" }, "From"), start),
       h("div", {}, h("label", { for: "le" }, "To"), end)),
+    shortBox,
     h("label", { class: "check", for: "lsh" }, sh, " First day is a half day"),
     ehWrap,
     h("label", { for: "lr" }, "Reason"), reason,
@@ -1356,6 +1364,7 @@ function requestCard(r, { admin = false } = {}) {
   return h("article", { class: `leave-req st-${r.status}` },
     h("div", { class: "row1" }, h("b", {}, admin ? r.name : r.type_label), h("span", { class: `pill ${r.status}` }, STATUS_LABEL[r.status])),
     admin ? h("div", { class: "meta" }, r.type_label) : null,
+    r.short_notice ? h("div", { class: "flags" }, h("span", { class: "flag w" }, "Short notice")) : null,
     h("div", {}, `${fmtRange(r)} · ${fmtDays(r.days)}`),
     r.reason ? h("div", { class: "meta" }, `“${r.reason}”`) : null,
     note, balInfo, decided,

@@ -37,6 +37,14 @@ def setup(client, source, monkeypatch):
     return client
 
 
+def backdate_approvals():
+    """Tests build the 5–18 Oct report; claims approved "today" in real time would belong to a later one."""
+    with SessionLocal() as db:
+        for x in db.query(ExpenseClaim).filter(ExpenseClaim.decided_at.isnot(None)):
+            x.decided_at = datetime(2026, 10, 17, tzinfo=UTC)
+        db.commit()
+
+
 def claim(http, **kw):
     body = {"expense_date": "2026-10-12", "category": "parking", "amount": "18.50", "description": "Parking at Acme"} | kw
     return http.post("/api/expenses", json=body)
@@ -117,6 +125,7 @@ def test_offshore_in_pesos_and_paid_once_in_pay_report(setup):
     login(c, "AB0001")
     for x in c.get("/api/admin/expenses").json()["pending"]:
         c.post(f"/api/admin/expenses/{x['id']}/decide", json={"decision": "approve"})
+    backdate_approvals()
     service = app.dependency_overrides[get_roster_service]()
     now = datetime(2026, 10, 19, 6, tzinfo=UTC)
     with SessionLocal() as db:
@@ -152,6 +161,7 @@ def test_offshore_incentive_claims(setup):
     login(c, "AB0001")
     d = c.post(f"/api/admin/expenses/{r.json()['id']}/decide", json={"decision": "approve"})  # no receipt needed
     assert d.status_code == 200
+    backdate_approvals()
     service = app.dependency_overrides[get_roster_service]()
     with SessionLocal() as db:
         rep = payreport.build(db, service, date(2026, 10, 18), now=datetime(2026, 10, 19, 6, tzinfo=UTC))
@@ -187,6 +197,7 @@ def test_monthly_incentive_with_booking_table(setup):
     c.post("/api/auth/logout")
     login(c, "AB0001")
     c.post(f"/api/admin/expenses/{got['id']}/decide", json={"decision": "approve"})
+    backdate_approvals()
     service = app.dependency_overrides[get_roster_service]()
     with SessionLocal() as db:
         rep = payreport.build(db, service, date(2026, 10, 18), now=datetime(2026, 10, 19, 6, tzinfo=UTC))

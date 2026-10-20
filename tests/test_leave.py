@@ -330,3 +330,23 @@ def test_long_service_ok():
     assert not long_service_ok(None, date(2030, 1, 1))
     assert not long_service_ok(date(2019, 10, 16), date(2026, 10, 15))
     assert long_service_ok(date(2019, 10, 15), date(2026, 10, 15))
+
+
+def test_short_notice_request_needs_acknowledgement(client, fixed_today, monkeypatch):
+    from app.config import get_settings
+    from app.models import EmailOutbox
+    s = get_settings()
+    for k, v in (("smtp_user", "hr@x.au"), ("smtp_password", "p")):
+        monkeypatch.setattr(s, k, v)
+    add_staff("AB0001", "brendan@x.au", role="admin")
+    add_staff("AB0010", None)
+    login(client, "AB0010")
+    assert apply(client, "2026-10-19", "2026-10-19", code="annual").status_code == 400  # 4 days, not acknowledged
+    assert apply(client, "2026-10-14", "2026-10-14", code="annual", short_notice=True).status_code == 400  # past
+    r = apply(client, "2026-10-19", "2026-10-20", code="annual", short_notice=True)
+    assert r.status_code == 200 and r.json()["short_notice"] is True
+    later = apply(client, "2026-11-02", "2026-11-02", code="annual", short_notice=True)  # ticked but not short
+    assert later.json()["short_notice"] is False
+    with SessionLocal() as db:
+        subjects = [m.subject for m in db.query(EmailOutbox).order_by(EmailOutbox.id)]
+    assert subjects[0].startswith("SHORT NOTICE Leave request: Ab0010") and not subjects[1].startswith("SHORT")
