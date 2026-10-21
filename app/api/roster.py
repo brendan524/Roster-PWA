@@ -32,6 +32,28 @@ def _leave(db: Session, staff_ids: list[str] | None, snap: RosterSnapshot) -> di
     return leave_on_days(db, staff_ids, min(days), max(days)) if days else {}
 
 
+def _leave_list(db: Session, snap: RosterSnapshot, names: dict[str, str]) -> list[dict]:
+    from datetime import date as _date, timedelta
+
+    from app.leave import ONSHORE_TYPES, OFFSHORE_TYPES
+    from app.models import LeaveRequest
+
+    months = [m.name for m in snap.months]
+    if not months:
+        return []
+    y, mo = map(int, months[0].split("-"))
+    first = _date(y, mo, 1)
+    y2, mo2 = map(int, months[-1].split("-"))
+    last = _date(y2 + (mo2 == 12), mo2 % 12 + 1, 1) - timedelta(days=1)
+    labels = {t.code: t.label for t in ONSHORE_TYPES + OFFSHORE_TYPES}
+    rows = (db.query(LeaveRequest).filter(LeaveRequest.status.in_(("approved", "pending")),
+                                          LeaveRequest.start_date <= last, LeaveRequest.end_date >= first)
+            .order_by(LeaveRequest.start_date).all())
+    return [{"staff_id": r.staff_id, "name": names.get(r.staff_id, r.staff_id), "status": r.status,
+             "label": labels.get(r.leave_type, r.leave_type), "start_date": r.start_date.isoformat(),
+             "end_date": r.end_date.isoformat(), "start_half": r.start_half, "end_half": r.end_half} for r in rows]
+
+
 @router.get("/roster/me")
 def my_roster(
     refresh: bool = False,
@@ -89,6 +111,8 @@ def all_roster(
             for m in snap.months
         ],
         "issues": [i.to_dict() for i in issues],
+        # Approved / requested leave in the months shown, for the team calendar.
+        "leave": _leave_list(db, snap, {s.staff_id: s.name for s in staff_rows}),
         "staff": [
             {"staff_id": s.staff_id, "name": s.name, "department": s.department, "active": s.active}
             for s in sorted(staff_rows, key=lambda s: s.name.lower())

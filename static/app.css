@@ -359,3 +359,13 @@ table.bookings a { color: var(--blue-dark); font-weight: 700; }
 .leave-tag { display: inline-block; font-size: 13px; font-weight: 700; border-radius: 999px; padding: 3px 10px; margin-bottom: 6px; }
 .leave-tag.approved { background: #EFF7E6; color: var(--green-dark); }
 .leave-tag.pending { background: var(--warn-bg); color: var(--warn); }
+.cal-day .cal-count { display: block; font-size: 11px; font-weight: 900; color: var(--blue-dark); line-height: 1; margin-top: 2px; }
+.cal-day .cal-leave { display: block; font-size: 10px; line-height: 1; }
+.cal-day .cal-leave.pending { filter: grayscale(1) opacity(.6); }
+.sub-head { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 14px 0 6px; }
+.leave-line { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; background: var(--white); border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; font-size: 14px; box-shadow: 0 1px 2px rgba(0,0,0,.05); }
+.leave-line .leave-tag { margin: 0 0 0 auto; }
+/* Team calendar: cells hold a count and a leave mark, so let them grow and never push the grid wider. */
+.team-cal .cal-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
+.team-cal .cal-day { aspect-ratio: auto; min-height: 52px; height: auto; padding: 4px 0; min-width: 0; }
+.cal-day.selected .cal-count { color: var(--white); }

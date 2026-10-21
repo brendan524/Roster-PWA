@@ -822,19 +822,91 @@ function renderTeam() {
   const m = a.months[state.teamMonth] || a.months[0];
   const shifts = m.shifts.filter((s) => !state.teamStaff || s.staff_id === state.teamStaff);
   const total = shifts.reduce((n, s) => n + s.scheduled_hours, 0);
+  const leave = (a.leave || []).filter((l) => !state.teamStaff || l.staff_id === state.teamStaff);
+  const cal = (state.teamLayout || localGet("teamLayout") || "calendar") === "calendar";
+
+  const layout = h("div", { class: "segmented", role: "group", "aria-label": "Layout" },
+    [["list", "List"], ["calendar", "Calendar"]].map(([v, label]) => h("button", {
+      "aria-pressed": (cal ? "calendar" : "list") === v ? "true" : "false",
+      onclick: () => { state.teamLayout = v; localSet("teamLayout", v); renderTeam(); },
+    }, label)));
 
   const blocks = [];
   if (!m.published) blocks.push(emptyCard(`No ${m.month} tab in the sheet yet`, "Staff will see “No shifts scheduled yet”."));
+  else if (cal) blocks.push(teamCalendar(a, m, shifts, leave));
   else if (!shifts.length) blocks.push(emptyCard("No shifts scheduled yet"));
-  for (const [d, list] of groupByDate(shifts)) blocks.push(dayBlock(d, list, a.today, d < a.today, true));
+  else {
+    const groups = [...groupByDate(shifts)];
+    const past = groups.filter(([d]) => d < a.today);
+    if (past.length && !state.teamShowEarlier) {
+      blocks.push(h("button", { class: "icon-btn show-earlier", onclick: () => { state.teamShowEarlier = true; renderTeam(); } },
+        `Show ${past.length} earlier day${past.length === 1 ? "" : "s"}`));
+    }
+    for (const [d, list] of groups) {
+      if (d < a.today && !state.teamShowEarlier) continue;
+      blocks.push(dayBlock(d, list, a.today, d < a.today, true));
+    }
+  }
 
   render(
     pageHead("Team roster", a, async () => { await loadAdmin(true); renderTabbar(); renderTeam(); }),
     teamSwitch(),
     h("div", { class: "filters" }, staffSel, monthSel),
+    layout,
     h("div", { class: "summary" },
       h("span", { class: "ok" }, `${shifts.length} shift${shifts.length === 1 ? "" : "s"} · ${fmtHours(total)}`)),
     ...blocks,
+  );
+}
+
+function leaveOn(leave, day) {
+  return leave.filter((l) => l.start_date <= day && day <= l.end_date).map((l) => ({
+    ...l, half: (l.start_half && day === l.start_date) || (l.end_half && day === l.end_date),
+  }));
+}
+
+function teamCalendar(a, m, shifts, leave) {
+  const [y, mo] = m.month.split("-").map(Number);
+  const first = new Date(y, mo - 1, 1);
+  const days = new Date(y, mo, 0).getDate();
+  const byDate = groupByDate(shifts);
+  if (!state.teamDay || !state.teamDay.startsWith(m.month)) {
+    state.teamDay = a.today.startsWith(m.month) ? a.today : `${m.month}-01`;
+  }
+  const cells = DOW.map((d) => h("div", { class: "cal-dow" }, d));
+  const lead = (first.getDay() + 6) % 7;
+  for (let i = 0; i < lead; i++) cells.push(h("div", { class: "cal-day blank" }));
+  for (let d = 1; d <= days; d++) {
+    const key = iso(new Date(y, mo - 1, d));
+    const list = byDate.get(key) || [];
+    const off = leaveOn(leave, key);
+    const people = new Set(list.filter((s) => !(s.leave && s.leave.status === "approved" && !s.leave.half)).map((s) => s.staff_id)).size;
+    const cls = ["cal-day", key < a.today && "past", key === a.today && "today", list.length && "has", key === state.teamDay && "selected"]
+      .filter(Boolean).join(" ");
+    cells.push(h("button", {
+      class: cls, "aria-pressed": key === state.teamDay ? "true" : "false",
+      "aria-label": `${fmtDayLong(key)}: ${people} working${off.length ? `, ${off.length} on leave` : ""}`,
+      onclick: () => { state.teamDay = key; renderTeam(); },
+    }, String(d),
+      people ? h("span", { class: "cal-count" }, String(people)) : null,
+      off.length ? h("span", { class: `cal-leave ${off.some((l) => l.status === "approved") ? "approved" : "pending"}` }, "🌴") : null));
+  }
+  const sel = state.teamDay;
+  const selShifts = (byDate.get(sel) || []);
+  const working = selShifts.filter((s) => !(s.leave && s.leave.status === "approved" && !s.leave.half));
+  const offToday = leaveOn(leave, sel);
+  return h("div", {},
+    h("div", { class: "cal team-cal" }, h("div", { class: "cal-grid" }, cells)),
+    h("p", { class: "hint" }, "Numbers = people working. 🌴 = someone on leave (amber = requested, not yet approved)."),
+    h("section", { class: "day" },
+      h("h3", { class: "day-label" }, fmtDayLong(sel), sel === a.today ? h("span", { class: "today-pill" }, "Today") : null),
+      h("h4", { class: "sub-head" }, `Working (${new Set(working.map((s) => s.staff_id)).size})`),
+      working.length ? working.map((s) => shiftCard(s, { past: sel < a.today, showWho: true })) : h("p", { class: "hint" }, "Nobody rostered."),
+      offToday.length ? [h("h4", { class: "sub-head" }, `On leave (${offToday.length})`),
+        offToday.map((l) => h("div", { class: `leave-line ${l.status}` },
+          h("b", {}, l.name), ` — ${l.label}${l.half ? " (half day)" : ""}`,
+          h("span", { class: `leave-tag ${l.status}` }, l.status === "approved" ? "Approved" : "Requested")))] : null,
+    ),
   );
 }
 
