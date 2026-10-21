@@ -406,3 +406,47 @@ def test_short_lunch_note_shortens_the_shift(source):
         sessions = pair_sessions(db.query(P).filter_by(staff_id="AB0003").order_by(P.occurred_at).all())
         analyse(sessions, service.shifts_between(d, d), MEL, NOW)
     assert not [f for f in sessions[0].flags if f["code"] == "early_finish"]
+
+
+def test_approved_leave_shows_on_roster_and_isnt_a_no_show(client, source):
+    from app.api.clock import day_report
+    add_staff("AB0001", None, role="admin")
+    person("AB0005", "Casual")
+    t = datetime.now(MEL).date()
+    d, d2 = t - timedelta(days=1), t + timedelta(days=1)
+    tabs = {m: [HEADER] for m in {f"{t:%Y-%m}", f"{d:%Y-%m}", f"{d2:%Y-%m}"}}
+    for day in (d, d2):
+        tabs[f"{day:%Y-%m}"].append([day.isoformat(), "AB0005", "Dylan", "Admin", "Office", "09:00", "17:00", "HQ", "", "", ""])
+    nm = f"{(t.replace(day=28) + timedelta(days=5)):%Y-%m}"
+    tabs.setdefault(nm, [HEADER])
+    source.tabs = tabs
+    with SessionLocal() as db:
+        db.add(LeaveRequest(staff_id="AB0005", leave_type="annual", start_date=d, end_date=d, days=1, reason="x", status="approved"))
+        db.add(LeaveRequest(staff_id="AB0005", leave_type="annual", start_date=d2, end_date=d2, days=1, reason="y", status="pending"))
+        db.commit()
+    login(client, "AB0005")
+    shifts = [s for m in client.get("/api/roster/me").json()["months"] for s in m["shifts"]]
+    by_date = {s["date"]: s.get("leave") for s in shifts}
+    assert by_date[d.isoformat()] == {"status": "approved", "label": "Annual leave", "half": False}
+    assert by_date[d2.isoformat()]["status"] == "pending"
+    client.post("/api/auth/logout")
+    login(client, "AB0001")
+    team = [s for m in client.get("/api/admin/roster").json()["months"] for s in m["shifts"]]
+    assert next(s for s in team if s["date"] == d.isoformat())["leave"]["status"] == "approved"
+    service = app.dependency_overrides[get_roster_service]()
+    with SessionLocal() as db:
+        _, no_shows, _, _ = day_report(db, service, d, datetime.now(UTC))
+    assert no_shows == []  # on approved leave, not a no-show
+
+
+def test_pay_report_doesnt_flag_shifts_on_leave(source):
+    person("AB0010")
+    d = date(2026, 10, 7)
+    roster(source, (d, "AB0010", "09:00", "12:00", "Fitness", "AB HQ", None))
+    with SessionLocal() as db:
+        db.add(LeaveRequest(staff_id="AB0010", leave_type="annual", start_date=d, end_date=d, days=1, reason="x", status="approved"))
+        db.commit()
+    _, by = build()
+    p = by["AB0010"]
+    assert p["flags"] == [] and "On approved annual leave" in p["shifts"][0]["notes"]
+    assert p["leave"] == ["Annual leave: 1 day (Wed 7 Oct)"]

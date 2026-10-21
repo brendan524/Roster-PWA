@@ -354,3 +354,8 @@ table.bookings td { padding: 4px 6px; border-bottom: 1px solid var(--line); whit
 table.bookings td input { width: 130px; padding: 6px 8px; font-size: 14px; border: 1px solid var(--line); border-radius: 6px; }
 table.bookings a { color: var(--blue-dark); font-weight: 700; }
 .short-notice { background: var(--warn-bg); border-left: 5px solid var(--warn); border-radius: 10px; padding: 10px 12px; margin-top: 12px; font-size: 14px; } .short-notice[hidden] { display: none; }
+.shift.on-leave .row1, .shift.on-leave .role, .shift.on-leave .meta { opacity: .5; }
+.shift.on-leave .time { text-decoration: line-through; }
+.leave-tag { display: inline-block; font-size: 13px; font-weight: 700; border-radius: 999px; padding: 3px 10px; margin-bottom: 6px; }
+.leave-tag.approved { background: #EFF7E6; color: var(--green-dark); }
+.leave-tag.pending { background: var(--warn-bg); color: var(--warn); }

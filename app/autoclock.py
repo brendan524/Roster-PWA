@@ -39,6 +39,9 @@ def run(db: Session, service: RosterService, now: datetime | None = None) -> int
         return 0
     snap = service.get()
     added = 0
+    from app.leave import leave_on_days
+    today = now.astimezone(service.tz).date()
+    leave = leave_on_days(db, list(people), today - timedelta(days=2), today)
     for shift in sorted(snap.shifts, key=lambda s: (s.date, s.start)):
         staff = people.get(shift.staff_id)
         if staff is None:
@@ -46,6 +49,9 @@ def run(db: Session, service: RosterService, now: datetime | None = None) -> int
         start, end = shift_bounds(shift, service.tz)
         if start > now or start < now - LOOKBACK:
             continue
+        lv = leave.get((shift.staff_id, shift.date))
+        if lv and lv["status"] == "approved" and not lv["half"]:
+            continue  # on leave that day
         due = [("in", start)] + ([("out", end)] if end <= now else [])
         for kind, at in due:
             result = record_punch(db, staff=staff, kind=kind, source="auto", client_id=_client_id(staff.staff_id, kind, at),

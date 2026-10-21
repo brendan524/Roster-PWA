@@ -34,7 +34,7 @@ from sqlalchemy.orm import Session
 
 from app import holidays, travel
 from app.config import get_settings
-from app.leave import count_days, label_for
+from app.leave import count_days, label_for, leave_on_days
 from app.models import ExpenseClaim, LeaveRequest, PayReport, Punch, Staff, XeroEmployeeLink
 from app.punches import analyse, effective_punches, local_day_bounds, pair_sessions, shift_bounds
 from app.roster import STANDARD_LUNCH_MIN, RosterService, Shift, short_lunch_minutes
@@ -161,6 +161,7 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
     links = {l.staff_id: l for l in db.query(XeroEmployeeLink)}
     venues = travel.venues_for(db, {sh.location for sh in in_period if is_first_aid(sh) and sh.location})
     people: dict[str, Person] = {}
+    leave_days = leave_on_days(db, None, start, end)
 
     def person(sid: str, fallback: str) -> Person:
         if sid not in people:
@@ -187,8 +188,13 @@ def build(db: Session, service: RosterService, end: date, now: datetime | None =
             row["notes"].append(f"{STANDARD_LUNCH_MIN - short} min lunch — finishes {short} min earlier (rostered end {sh.end})")
         pr.shifts.append(row)
         ph = holidays.holiday(sh.date)
+        lv = leave_days.get((sh.staff_id, sh.date))
+        if lv and lv["status"] == "approved":
+            row["notes"].append(f"On approved {lv['label'].lower()}" + (" (half day)" if lv["half"] else ""))
         if sess is None:
             row["paid_hours"] = 0
+            if lv and lv["status"] == "approved" and not lv["half"]:
+                continue  # on leave: nothing to pay or flag for the shift (leave is listed separately)
             if rs < now:
                 row["notes"].append("Didn't clock in — not paid")
                 pr.flags.append(f"{_day(sh.date)} {sh.start}–{sh.end}: no clock-in or clock-out (rostered, not paid)")

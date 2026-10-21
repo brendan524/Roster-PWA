@@ -225,3 +225,23 @@ def balances_for(db: Session, staff: Staff, today: date) -> list[Balance] | None
     adjustments = db.query(LeaveAdjustment).filter_by(staff_id=staff.staff_id).all()
     return [compute_balance(t, staff.join_date, today, requests, adjustments)
             for t in OFFSHORE_TYPES if t.accrual is not None]
+
+
+def leave_on_days(db: Session, staff_ids: list[str] | None, start: date, end: date) -> dict[tuple[str, date], dict]:
+    """(staff_id, day) → {"status": "approved"|"pending", "label", "half"} for leave covering that day.
+    Approved leave wins over a pending request on the same day."""
+    q = db.query(LeaveRequest).filter(LeaveRequest.status.in_(("approved", "pending")),
+                                      LeaveRequest.start_date <= end, LeaveRequest.end_date >= start)
+    if staff_ids is not None:
+        q = q.filter(LeaveRequest.staff_id.in_(staff_ids))
+    labels = {t.code: t.label for t in ONSHORE_TYPES + OFFSHORE_TYPES}
+    out: dict[tuple[str, date], dict] = {}
+    for r in q:
+        d = max(r.start_date, start)
+        while d <= min(r.end_date, end):
+            key = (r.staff_id, d)
+            if key not in out or (out[key]["status"] == "pending" and r.status == "approved"):
+                half = (r.start_half and d == r.start_date) or (r.end_half and d == r.end_date)
+                out[key] = {"status": r.status, "label": labels.get(r.leave_type, r.leave_type), "half": bool(half)}
+            d += timedelta(days=1)
+    return out

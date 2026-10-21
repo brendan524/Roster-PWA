@@ -15,6 +15,7 @@ from app.api.auth import authenticate
 from app.config import get_settings
 from app.db import get_db
 from app.deps import admin_staff, get_roster_service, ready_staff
+from app.leave import leave_on_days
 from app.models import Kiosk, Punch, Staff
 from app.punches import (
     PunchError,
@@ -243,7 +244,10 @@ def day_report(db: Session, service: RosterService, day: date, now: datetime):
 
     no_shows = analyse(sessions, shifts, tz, now, roster_known=roster_known)
     todays = sorted((s for s in sessions if day_start <= s.anchor < day_end), key=lambda s: s.anchor)
-    return todays, [s for s in no_shows if s.date == day], roster_known, roster_error
+    # Rostered but on approved leave that day: not a no-show.
+    on_leave = {k for k, v in leave_on_days(db, None, day, day).items() if v["status"] == "approved" and not v["half"]}
+    no_shows = [s for s in no_shows if s.date == day and (s.staff_id, s.date) not in on_leave]
+    return todays, no_shows, roster_known, roster_error
 
 
 @router.get("/admin/clock")

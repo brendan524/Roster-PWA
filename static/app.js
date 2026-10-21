@@ -424,8 +424,12 @@ function clockCard() {
 
 function shiftCard(s, { past = false, showWho = false } = {}) {
   const meta = [s.location, s.department].filter(Boolean);
-  return h("article", { class: `shift ${deptClass(s.department)} ${past ? "past" : ""}` },
+  const lv = s.leave;
+  const onLeave = lv && lv.status === "approved" && !lv.half;
+  return h("article", { class: `shift ${deptClass(s.department)} ${past ? "past" : ""} ${onLeave ? "on-leave" : ""}` },
     showWho ? h("div", { class: "who" }, s.staff_name || s.staff_id, " · ", s.staff_id) : null,
+    lv ? h("div", { class: `leave-tag ${lv.status}` },
+      lv.status === "approved" ? `🌴 On leave${lv.half ? " (half day)" : ""} — ${lv.label}` : `Leave requested — ${lv.label}${lv.half ? " (half day)" : ""}`) : null,
     h("div", { class: "row1" },
       h("span", { class: "time" }, `${fmtTime(s.start)} – ${fmtTime(s.end)}`, s.overnight ? " (next day)" : "",
         s.local ? h("span", { class: "tz" }, " " + ((state.roster && state.roster.sheet_tz_label) || "")) : null),
@@ -463,7 +467,7 @@ function renderMine() {
   setBanner(r);
   const today = r.today;
   const all = r.months.flatMap((m) => m.shifts);
-  const next = all.find((s) => !isPast(s, today));
+  const next = all.find((s) => !isPast(s, today) && !(s.leave && s.leave.status === "approved" && !s.leave.half));
 
   const seg = h("div", { class: "segmented", role: "group", "aria-label": "View" },
     ["list", "calendar"].map((v) => h("button", {
