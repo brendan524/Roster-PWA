@@ -152,6 +152,7 @@ class LeaveRequest(Base):
     decided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     decision_note: Mapped[str] = mapped_column(String(500), default="")
     short_notice: Mapped[bool] = mapped_column(Boolean, default=False)  # asked for inside the notice period
+    requested_by: Mapped[str | None] = mapped_column(String(32))  # an admin who recorded it for the staff member
 
 
 class LeaveAdjustment(Base):

@@ -1455,6 +1455,7 @@ function requestCard(r, { admin = false } = {}) {
     h("div", { class: "row1" }, h("b", {}, admin ? r.name : r.type_label), h("span", { class: `pill ${r.status}` }, STATUS_LABEL[r.status])),
     admin ? h("div", { class: "meta" }, r.type_label) : null,
     r.short_notice ? h("div", { class: "flags" }, h("span", { class: "flag w" }, "Short notice")) : null,
+    r.requested_by ? h("div", { class: "flags" }, h("span", { class: "flag i" }, `Recorded by ${r.requested_by}`)) : null,
     h("div", {}, `${fmtRange(r)} · ${fmtDays(r.days)}`),
     r.reason ? h("div", { class: "meta" }, `“${r.reason}”`) : null,
     note, balInfo, decided,
@@ -1465,8 +1466,57 @@ function requestCard(r, { admin = false } = {}) {
       try { await api(`/api/leave/requests/${r.id}/cancel`, { method: "POST" }); await loadLeave(); renderTabbar(); renderLeave(); }
       catch (ex) { alert(ex.message); }
     } }, "Cancel request") : null,
-    admin && r.status === "pending" ? decisionRow(r) : null,
+    admin && r.status === "pending" ? (r.requested_by && !(state.leaveAdmin && state.leaveAdmin.can_approve_on_behalf)
+      ? h("div", { class: "meta" }, "Waiting for Brendan to approve (recorded by an admin).") : decisionRow(r)) : null,
   );
+}
+
+function onBehalfForm(A) {
+  const err = h("p", { class: "form-error", hidden: true, role: "alert" });
+  const fail = (m) => { err.textContent = m; err.hidden = false; };
+  const who = h("select", { id: "obs" }, h("option", { value: "" }, "Choose a staff member…"),
+    A.people.map((p) => h("option", { value: p.staff_id }, `${p.name} (${p.staff_id})`)));
+  const type = h("select", { id: "obt", disabled: true }, h("option", { value: "" }, "Choose the person first"));
+  who.onchange = () => {
+    const p = A.people.find((x) => x.staff_id === who.value);
+    type.replaceChildren(...(p ? p.types.map((t) => h("option", { value: t.code }, t.label)) : [h("option", { value: "" }, "Choose the person first")]));
+    type.disabled = !p;
+  };
+  const start = h("input", { type: "date", id: "obf", min: shiftDays(A.today, -183) });
+  const end = h("input", { type: "date", id: "obe", min: shiftDays(A.today, -183) });
+  start.onchange = () => { end.min = start.value; if (!end.value || end.value < start.value) end.value = start.value; };
+  const sh = h("input", { type: "checkbox", id: "obsh" });
+  const eh = h("input", { type: "checkbox", id: "obeh" });
+  const reason = h("input", { type: "text", id: "obr", maxlength: "500", placeholder: "e.g. called in sick, medical certificate provided" });
+  const files = h("input", { type: "file", id: "obfiles", accept: "application/pdf,image/*", multiple: true });
+  const btn = h("button", { class: "btn", type: "submit" }, "Record leave");
+  return h("form", { class: "card leave-form", onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true;
+    if (!who.value) return fail("Choose the staff member.");
+    if (!start.value || !end.value) return fail("Choose the dates.");
+    if (reason.value.trim().length < 3) return fail("Please give a reason.");
+    btn.disabled = true;
+    try {
+      const r = await api("/api/admin/leave/requests", { method: "POST", body: { staff_id: who.value, leave_type: type.value,
+        start_date: start.value, end_date: end.value, start_half: sh.checked, end_half: eh.checked && end.value !== start.value, reason: reason.value } });
+      const failed = [];
+      for (const f of files.files) { try { await uploadFile(r.id, f); } catch (ex) { failed.push(ex.message); } }
+      state.onBehalfOpen = false;
+      state.leaveMsg = `Leave recorded for ${r.name}. ${A.can_approve_on_behalf ? "Approve it below." : "It's waiting for Brendan to approve."}`
+        + (failed.length ? ` Some files didn't upload: ${failed.join("; ")}` : "");
+      await loadLeave(); renderTabbar(); renderLeave();
+    } catch (ex) { fail(ex.message); btn.disabled = false; }
+  } },
+    h("p", { class: "hint" }, "For leave a staff member didn't apply for themselves — including past dates (up to 6 months back). Brendan approves it."),
+    h("label", { for: "obs" }, "Staff member"), who,
+    h("label", { for: "obt" }, "Type of leave"), type,
+    h("div", { class: "date-row" }, h("div", {}, h("label", { for: "obf" }, "From"), start), h("div", {}, h("label", { for: "obe" }, "To"), end)),
+    h("label", { class: "check", for: "obsh" }, sh, " First day is a half day"),
+    h("label", { class: "check", for: "obeh" }, eh, " Last day is a half day"),
+    h("label", { for: "obr" }, "Reason"), reason,
+    h("label", { for: "obfiles" }, "Attachments (optional)"), files,
+    err, btn,
+    h("button", { class: "link-btn dark", type: "button", onclick: () => { state.onBehalfOpen = false; renderLeave(); } }, "Cancel"));
 }
 
 function decisionRow(r) {
@@ -1511,6 +1561,9 @@ function renderLeave() {
       : h("button", { class: "btn", onclick: () => { state.leaveFormOpen = true; state.leaveMsg = null; renderLeave(); } }, "Apply for leave"),
     upcoming.length ? [h("h2", { class: "month-title" }, "Requests"), ...upcoming.map((r) => requestCard(r))] : null,
     past.length ? [h("h2", { class: "month-title" }, "Past"), ...past.slice(0, 10).map((r) => requestCard(r))] : null,
+    A ? [h("h2", { class: "month-title" }, "Record leave for someone"),
+      state.onBehalfOpen ? onBehalfForm(A)
+        : h("button", { class: "btn secondary", onclick: () => { state.onBehalfOpen = true; state.leaveMsg = null; renderLeave(); } }, "Record leave for a staff member")] : null,
     A ? adminLeaveExtras(A) : null,
     state.xero ? [h("h2", { class: "month-title" }, "Xero"), xeroPanel(state.xero)] : null,
   );

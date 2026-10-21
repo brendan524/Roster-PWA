@@ -53,6 +53,7 @@ def _request_out(r: LeaveRequest, staff: Staff | None = None, names: dict[str, s
         "attachments": (files or {}).get(r.id, []),
         "id": r.id,
         "short_notice": r.short_notice,
+        "requested_by": (names or {}).get(r.requested_by, r.requested_by) if r.requested_by else None,
         "staff_id": r.staff_id,
         "name": staff.name if staff else None,
         "leave_type": r.leave_type,
@@ -230,8 +231,8 @@ def cancel_leave(request_id: int, staff: Staff = Depends(ready_staff), db: Sessi
 # ---- admin --------------------------------------------------------------------
 
 def _with_balance_check(db: Session, r: LeaveRequest, staff: Staff, balances_cache: dict,
-                        files: dict[int, list[dict]] | None = None) -> dict:
-    out = _request_out(r, staff, files=files)
+                        files: dict[int, list[dict]] | None = None, names: dict[str, str] | None = None) -> dict:
+    out = _request_out(r, staff, names, files)
     if staff.staff_id not in balances_cache:
         balances_cache[staff.staff_id] = balances_for(db, staff, today())
     bals = balances_cache[staff.staff_id]
@@ -250,7 +251,7 @@ def _with_balance_check(db: Session, r: LeaveRequest, staff: Staff, balances_cac
 
 
 @router.get("/admin/leave")
-def admin_leave(_: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
+def admin_leave(admin: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
     staff = {s.staff_id: s for s in db.query(Staff).all()}
     names = {sid: s.name for sid, s in staff.items()}
     cache: dict = {}
@@ -265,12 +266,80 @@ def admin_leave(_: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
     files = _attachments(db, [r.id for r in pending + recent])
     return {
         "today": today().isoformat(),
-        "pending": [_with_balance_check(db, r, staff[r.staff_id], cache, files) for r in pending],
+        "pending": [_with_balance_check(db, r, staff[r.staff_id], cache, files, names) for r in pending],
         "recent": [_request_out(r, staff[r.staff_id], names, files) for r in recent],
         "balances": [{"staff_id": s.staff_id, "name": s.name,
                       "join_date": s.join_date.isoformat() if s.join_date else None,
                       "balances": _balances_out(db, s, history=24)} for s in offshore],
+        "can_approve_on_behalf": admin.staff_id in on_behalf_approvers(),
+        # For "Record leave for someone": who, and which leave types each can take.
+        "people": [{"staff_id": s.staff_id, "name": s.name,
+                    "types": [{"code": t.code, "label": t.label}
+                              for t in types_for(s, _long_service_ok(db, s), _is_casual(db, s))]}
+                   for s in sorted(staff.values(), key=lambda s: s.name.lower())
+                   if s.active and s.has_leave and s.staff_id != admin.staff_id],
     }
+
+
+def on_behalf_approvers() -> set[str]:
+    return {x.strip().upper() for x in get_settings().leave_on_behalf_approvers.split(",") if x.strip()}
+
+
+ON_BEHALF_BACKDATE_DAYS = 183
+
+
+class OnBehalfIn(LeaveIn):
+    staff_id: str
+
+
+@router.post("/admin/leave/requests")
+def record_for_someone(body: OnBehalfIn, admin: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
+    """An admin records leave for a staff member (e.g. after the fact). It waits for Brendan's approval."""
+    staff = db.get(Staff, body.staff_id)
+    if staff is None or not staff.active:
+        raise HTTPException(404, "No such staff member.")
+    if staff.staff_id == admin.staff_id:
+        raise HTTPException(400, "Use your own Leave form for your leave.")
+    if not staff.has_leave:
+        raise HTTPException(400, f"{staff.name} doesn't take leave in the app.")
+    lt = type_by_code(staff, body.leave_type, _long_service_ok(db, staff), _is_casual(db, staff))
+    if lt is None:
+        raise HTTPException(400, f"That leave type isn't available to {staff.name}.")
+    if body.end_date < body.start_date:
+        raise HTTPException(400, "The end date is before the start date.")
+    if (body.end_date - body.start_date).days >= MAX_REQUEST_DAYS:
+        raise HTTPException(400, f"One request can cover at most {MAX_REQUEST_DAYS} days. Split it into two.")
+    if len(body.reason.strip()) < 3:
+        raise HTTPException(400, "Please give a reason.")
+    if body.start_date < today() - timedelta(days=ON_BEHALF_BACKDATE_DAYS):
+        raise HTTPException(400, "That's more than 6 months ago.")
+    days = count_days(body.start_date, body.end_date, body.start_half, body.end_half)
+    if days <= 0:
+        raise HTTPException(400, "Those dates don't include any working days (Mon–Fri).")
+    db.query(Staff).filter_by(staff_id=staff.staff_id).with_for_update().one()
+    clash = (db.query(LeaveRequest)
+             .filter(LeaveRequest.staff_id == staff.staff_id, LeaveRequest.status.in_(("pending", "approved")),
+                     LeaveRequest.start_date <= body.end_date, LeaveRequest.end_date >= body.start_date).first())
+    if clash:
+        db.rollback()
+        raise HTTPException(409, f"{staff.name} already has leave for {clash.start_date:%d %b}–{clash.end_date:%d %b}.")
+    req = LeaveRequest(staff_id=staff.staff_id, leave_type=lt.code, start_date=body.start_date, end_date=body.end_date,
+                       start_half=body.start_half, end_half=body.end_half, days=days, reason=body.reason.strip(),
+                       status="pending", requested_by=admin.staff_id)
+    db.add(req)
+    db.flush()
+    span = f"{_dates_text(req)} ({float(days):g} working day{'s' if days != 1 else ''})"
+    for a in db.query(Staff).filter(Staff.staff_id.in_(on_behalf_approvers())):
+        if a.email and a.staff_id != admin.staff_id:
+            mailer.queue(db, a.email, f"Leave recorded for {staff.name} by {admin.name} — needs your approval",
+                         f"{admin.name} recorded {lt.label.lower()} for {staff.name} ({staff.staff_id}):\n\n"
+                         f"  {span}\n  Reason: {req.reason}\n\nOnly you can approve it — Leave tab in the staff app.")
+    mailer.queue(db, staff.email, f"Leave recorded for you: {lt.label.lower()}, {_dates_text(req)}",
+                 f"Hi {staff.name.split()[0]},\n\n{admin.name} has recorded {lt.label.lower()} for you:\n\n  {span}\n"
+                 f"  Reason: {req.reason}\n\nIt's waiting for approval — you'll get an email when it's decided. "
+                 "You can see it on the Leave tab in the staff app.")
+    db.commit()
+    return _request_out(req, staff, {admin.staff_id: admin.name})
 
 
 class DecisionIn(BaseModel):
@@ -285,6 +354,8 @@ def decide(request_id: int, body: DecisionIn, admin: Staff = Depends(admin_staff
         raise HTTPException(404, "Request not found.")
     if req.status != "pending":
         raise HTTPException(409, f"This request was already {req.status}.")
+    if req.requested_by and admin.staff_id not in on_behalf_approvers():
+        raise HTTPException(403, "Leave recorded by an admin can only be approved by Brendan.")
     req.status = "approved" if body.decision == "approve" else "declined"
     req.decided_by = admin.staff_id
     req.decided_at = datetime.now(UTC)
@@ -339,8 +410,8 @@ async def add_attachment(request_id: int, request: Request, staff: Staff = Depen
     """Upload one file as the raw request body; its name goes in the X-Filename header."""
     import hashlib
 
-    req = db.query(LeaveRequest).filter_by(id=request_id, staff_id=staff.staff_id).first()
-    if req is None:
+    req = db.get(LeaveRequest, request_id)
+    if req is None or not (req.staff_id == staff.staff_id or (staff.is_admin and req.requested_by == staff.staff_id)):
         raise HTTPException(404, "Request not found.")
     if req.status in ("cancelled", "declined"):
         raise HTTPException(409, f"That request was {req.status}, so files can't be added.")

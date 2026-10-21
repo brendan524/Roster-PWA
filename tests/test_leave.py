@@ -350,3 +350,36 @@ def test_short_notice_request_needs_acknowledgement(client, fixed_today, monkeyp
     with SessionLocal() as db:
         subjects = [m.subject for m in db.query(EmailOutbox).order_by(EmailOutbox.id)]
     assert subjects[0].startswith("SHORT NOTICE Leave request: Ab0010") and not subjects[1].startswith("SHORT")
+
+
+def test_admin_records_leave_for_someone_only_brendan_approves(client, fixed_today, monkeypatch):
+    from app.config import get_settings
+    from app.models import EmailOutbox
+    s = get_settings()
+    for k, v in (("smtp_user", "hr@x.au"), ("smtp_password", "p"), ("leave_on_behalf_approvers", "AB0001")):
+        monkeypatch.setattr(s, k, v)
+    add_staff("AB0001", "brendan@x.au", role="admin")
+    add_staff("AB0005", "dylan@x.au", role="admin")
+    add_staff("AB0010", "sonya@x.au")
+    login(client, "AB0005")
+    body = {"staff_id": "AB0010", "leave_type": "personal", "start_date": "2026-10-06", "end_date": "2026-10-07",
+            "reason": "Called in sick, med cert provided"}
+    assert client.post("/api/admin/leave/requests", json=body | {"staff_id": "AB0005"}).status_code == 400  # not yourself
+    assert client.post("/api/admin/leave/requests", json=body | {"start_date": "2026-01-01", "end_date": "2026-01-02"}).status_code == 400
+    r = client.post("/api/admin/leave/requests", json=body)  # in the past: fine
+    assert r.status_code == 200 and r.json()["requested_by"] == "Ab0005" and r.json()["status"] == "pending"
+    rid = r.json()["id"]
+    assert client.post(f"/api/leave/requests/{rid}/attachments", content=b"%PDF-1.4 x", headers={"x-filename": "cert.pdf"}).status_code == 200
+    with SessionLocal() as db:
+        to = {m.to_addr: m.subject for m in db.query(EmailOutbox)}
+    assert to["brendan@x.au"].startswith("Leave recorded for Ab0010 by Ab0005") and "sonya@x.au" in to
+    a = client.get("/api/admin/leave").json()
+    assert a["can_approve_on_behalf"] is False and "AB0005" not in [p["staff_id"] for p in a["people"]]
+    assert client.post(f"/api/admin/leave/{rid}/decide", json={"decision": "approve"}).status_code == 403  # Dylan can't
+    client.post("/api/auth/logout")
+    login(client, "AB0001")
+    assert client.post(f"/api/admin/leave/{rid}/decide", json={"decision": "approve"}).status_code == 200
+    client.post("/api/auth/logout")
+    login(client, "AB0010")
+    mine = client.get("/api/leave/me").json()["requests"]
+    assert mine[0]["status"] == "approved" and mine[0]["requested_by"] == "Ab0005"
