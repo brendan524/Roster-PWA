@@ -361,3 +361,36 @@ class ExpenseAttachment(Base):
     sha256: Mapped[str] = mapped_column(String(64))
     data: Mapped[bytes] = mapped_column(LargeBinary)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class KeyItem(Base):
+    """A numbered key or remote belonging to the business."""
+
+    __tablename__ = "key_items"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    kind: Mapped[str] = mapped_column(String(10))  # key | remote
+    number: Mapped[str] = mapped_column(String(20))
+    description: Mapped[str] = mapped_column(String(200), default="")
+    retired: Mapped[bool] = mapped_column(Boolean, default=False)  # no longer in use (lost / decommissioned)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+
+
+class KeyIssue(Base):
+    """One key/remote given to one person: accepted (signed), then returned (or lost)."""
+
+    __tablename__ = "key_issues"
+
+    id: Mapped[int] = mapped_column(Integer, primary_key=True)
+    item_id: Mapped[int] = mapped_column(ForeignKey("key_items.id", ondelete="CASCADE"), index=True)
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.staff_id", ondelete="CASCADE"), index=True)
+    status: Mapped[str] = mapped_column(String(12), default="pending")  # pending | held | returned | lost | cancelled
+    issued_by: Mapped[str] = mapped_column(String(32))
+    issued_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    accepted_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    signed_name: Mapped[str] = mapped_column(String(120), default="")  # typed full name as their signature
+    accept_ip: Mapped[str] = mapped_column(String(64), default="")
+    terms: Mapped[str] = mapped_column(String, default="")  # the exact terms they agreed to
+    closed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))  # returned / lost / cancelled
+    closed_by: Mapped[str | None] = mapped_column(String(32))
+    note: Mapped[str] = mapped_column(String(300), default="")

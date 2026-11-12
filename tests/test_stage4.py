@@ -339,7 +339,8 @@ def test_digest_weekdays_and_monday_covers_weekend(client, source, email_on, mon
     add_staff("AB0001", None, role="admin")
     add_staff("AB0010", None)
     set_email("AB0001", "brendan@example.com")
-    mon = today() - timedelta(days=today().weekday()) - timedelta(days=7)  # last week's Monday (past, so roster loads)
+    # A Monday 1–2 weeks ahead: its weekend is always in this month or next, the months the roster loads.
+    mon = today() + timedelta(days=7 - today().weekday() + 7)
     sat, sun = mon - timedelta(days=2), mon - timedelta(days=1)
     roster(source, (sat, "AB0010", "09:00", "11:00"), (sun, "AB0010", "09:00", "11:00"))
     service = app.dependency_overrides[get_roster_service]()

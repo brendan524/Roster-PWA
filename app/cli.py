@@ -231,6 +231,17 @@ def set_active(staff_id: str, active: bool) -> int:
         if not active:
             delete_all_sessions(db, staff.staff_id)
         print(f"{staff.name} ({staff.staff_id}) is now {'active' if active else 'inactive'}.")
+        if not active:
+            from app import mailer
+            from app.api.keys import outstanding_for
+            held = outstanding_for(db, staff.staff_id)
+            if held:
+                print(f"  ⚠ Still has: {', '.join(held)} — collect them and mark them returned (Team → Keys).")
+                mailer.alert(db, f"{staff.name} has left with keys",
+                             f"{staff.name} ({staff.staff_id}) was made inactive but still has: {', '.join(held)}.\n"
+                             "Collect them and mark them returned in the staff app (Team → Keys).",
+                             f"keys-leaver:{staff.staff_id}")
+                db.commit()
     return 0
 
 

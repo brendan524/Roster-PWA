@@ -9,6 +9,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import availability as av
+from app.api.keys import outstanding_for
 from app import mailer, state
 from app.db import get_db
 from app.deps import admin_staff, ready_staff
@@ -100,6 +101,7 @@ def list_staff(_: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
         "must_change_password": s.must_change_password,
         "availability": s.availability_mode if av.applies_to(db, s) else None,
         "travel_eligible": s.travel_eligible,
+        "keys": outstanding_for(db, s.staff_id),
     } for s in sorted(db.query(Staff), key=lambda s: (not s.active, s.name.lower()))]}
 
 
@@ -160,3 +162,27 @@ def set_staff_email(staff_id: str, body: EmailIn, _: Staff = Depends(admin_staff
     s.email = email
     db.commit()
     return {"ok": True, "email": email}
+
+
+class ActiveIn(BaseModel):
+    active: bool
+
+
+@router.post("/admin/staff/{staff_id}/active")
+def set_active(staff_id: str, body: ActiveIn, admin: Staff = Depends(admin_staff), db: Session = Depends(get_db)):
+    """Mark someone as left (can't log in; their keys/remotes are flagged until returned) or back again."""
+    s = _get(db, staff_id)
+    if s.staff_id == admin.staff_id:
+        raise HTTPException(400, "You can't deactivate yourself.")
+    s.active = body.active
+    db.commit()
+    held = []
+    if not body.active:
+        delete_all_sessions(db, s.staff_id)
+        held = outstanding_for(db, s.staff_id)
+        if held:
+            mailer.alert(db, f"{s.name} has left with keys",
+                         f"{s.name} ({s.staff_id}) was marked as left but still has: {', '.join(held)}.\n"
+                         "Collect them and mark them returned in the staff app (Team → Keys).", f"keys-leaver:{s.staff_id}")
+            db.commit()
+    return {"ok": True, "keys": held}

@@ -89,6 +89,12 @@ def build_digest(db: Session, service: RosterService, now: datetime) -> str | No
         if problems:
             sections.append(f"Clock-in problems on {_fmt_day(day)} (fix on the Clock tab):\n" + "\n".join(problems))
 
+    from app.api.keys import outstanding_for
+    leavers = [s for s in db.query(Staff).filter_by(active=False) if outstanding_for(db, s.staff_id)]
+    if leavers:
+        sections.append("Keys / remotes still with people who have left (Team → Keys):\n"
+                        + "\n".join(f"• {s.name} — {', '.join(outstanding_for(db, s.staff_id))}" for s in leavers))
+
     if snap is not None:
         from app import payreport, travel
         locations = {sh.location for sh in snap.shifts

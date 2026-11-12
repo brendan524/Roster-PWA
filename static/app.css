@@ -369,3 +369,7 @@ table.bookings a { color: var(--blue-dark); font-weight: 700; }
 .team-cal .cal-grid { grid-template-columns: repeat(7, minmax(0, 1fr)); }
 .team-cal .cal-day { aspect-ratio: auto; min-height: 52px; height: auto; padding: 4px 0; min-width: 0; }
 .cal-day.selected .cal-count { color: var(--white); }
+.key-accept { border-left: 5px solid var(--blue); margin-bottom: 14px; }
+.key-terms { font-size: 14px; background: var(--bg); border-radius: 8px; padding: 10px 12px; margin: 8px 0 0; }
+.key-picks { display: grid; gap: 2px; margin: 8px 0; }
+.key-picks label.check { margin-top: 6px; }

@@ -320,6 +320,15 @@ paid twice.
 **Other** (client, incentive and reason, date achieved). Amount in pesos, optional evidence. Brendan approves (no receipt needed);
 approved incentives go into the pay report as **Incentive (PHP)**, separate from reimbursements.
 
+## Key register
+
+**Team → Keys** (admins): add numbered keys and remotes, issue one or more to an Australian staff member, and see
+who holds what. The staff member gets an email and a card at the top of My shifts: they read the terms, tick to
+agree and sign by typing their full name (must match the app); the time, name and the exact terms are kept.
+Mark items **Returned** or **Lost** (lost items are retired). **Team → Staff → Mark as left** stops someone logging
+in; if they still hold keys/remotes you get an alert, and the daily check lists them until they're returned.
+The wording of the terms is `TERMS` in `app/api/keys.py`.
+
 ## Still to do
 
 - **Onboarding new staff** — an admin screen (possibly on the kiosk) to add a new employee: details,

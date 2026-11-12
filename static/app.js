@@ -253,6 +253,11 @@ function renderAccount() {
       h("label", { for: "acc-pw" }, "Your password (to confirm)"), pw,
       err, save,
     ),
+    state.myKeys && state.myKeys.held.length ? h("div", { class: "card account", style: "margin-top:14px" },
+      h("b", {}, "🔑 Keys & remotes you have"),
+      h("ul", { class: "avail-dates" }, state.myKeys.held.map((i) => h("li", {}, h("span", {}, h("b", {}, i.item),
+        h("span", { class: "meta" }, ` · signed for ${fmtDay(i.accepted_at.slice(0, 10))}`))))),
+      h("p", { class: "hint" }, "Please return these when you finish working with AB Group.")) : null,
     pinCard(),
     h("div", { class: "card account", style: "margin-top:14px" },
       h("b", {}, "Password"),
@@ -324,11 +329,13 @@ function pageHead(title, data, onRefresh) {
 // ---------- my roster ----------
 
 async function loadMine(refresh = false) {
-  const [roster, clock, avail] = await Promise.all([
+  const [roster, clock, avail, keys] = await Promise.all([
     api("/api/roster/me" + (refresh ? "?refresh=true" : "")),
     api("/api/clock/me").catch(() => state.clock),
     api("/api/availability/me").catch(() => state.avail),
+    api("/api/keys/me").catch(() => state.myKeys),
   ]);
+  state.myKeys = keys;
   state.roster = roster;
   state.clock = clock;
   state.avail = avail;
@@ -486,6 +493,7 @@ function renderMine() {
 
   const body = state.view === "list" ? renderList(r, today) : renderCalendar(r, today);
   render(
+    keyAcceptCard(),
     clockCard(),
     pageHead("My shifts", r, async () => { await loadMine(true); renderMine(); }),
     seg,
@@ -493,6 +501,32 @@ function renderMine() {
     body,
     availabilitySection(),
   );
+}
+
+// ---------- keys (staff) ----------
+
+function keyAcceptCard() {
+  const K = state.myKeys;
+  if (!K || !K.pending.length) return null;
+  const err = h("p", { class: "form-error", hidden: true, role: "alert" });
+  const agree = h("input", { type: "checkbox", id: "kagree" });
+  const name = h("input", { type: "text", id: "kname", autocomplete: "name", placeholder: K.name });
+  const btn = h("button", { class: "btn", type: "submit" }, "Accept and sign");
+  return h("form", { class: "card key-accept", onsubmit: async (e) => {
+    e.preventDefault(); err.hidden = true;
+    if (!agree.checked) { err.textContent = "Tick the box to agree to the terms."; err.hidden = false; return; }
+    btn.disabled = true;
+    try {
+      await api("/api/keys/me/accept", { method: "POST", body: { issue_ids: K.pending.map((i) => i.id), signed_name: name.value, agree: true } });
+      state.myKeys = await api("/api/keys/me"); renderMine();
+    } catch (ex) { err.textContent = ex.message; err.hidden = false; btn.disabled = false; }
+  } },
+    h("b", {}, "🔑 Please accept"),
+    h("ul", { class: "clash-ul" }, K.pending.map((i) => h("li", {}, h("b", {}, i.item), ` — given by ${i.issued_by}`))),
+    h("p", { class: "key-terms" }, K.terms),
+    h("label", { class: "check", for: "kagree" }, agree, " I agree to these terms"),
+    h("label", { for: "kname" }, "Sign by typing your full name"), name,
+    err, btn);
 }
 
 // ---------- availability ----------
@@ -699,7 +733,7 @@ async function loadAdmin(refresh = false) {
 
 function teamSwitch() {
   return h("div", { class: "segmented", role: "group", "aria-label": "Show" },
-    [["roster", "Roster"], ["availability", "Availability"], ["staff", "Staff"]].map(([v, label]) => h("button", {
+    [["roster", "Roster"], ["availability", "Availability"], ["staff", "Staff"], ["keys", "Keys"]].map(([v, label]) => h("button", {
       "aria-pressed": state.teamView === v ? "true" : "false",
       onclick: () => { state.teamView = v; renderTeam(); },
     }, label)));
@@ -784,6 +818,7 @@ async function renderStaffAdmin(reload = false) {
       s.pin_locked || s.login_locked ? h("div", { class: "pay-flags" }, [s.pin_locked ? "PIN locked (too many wrong tries)" : null,
         s.login_locked ? "Login locked (too many wrong passwords)" : null].filter(Boolean).join(" · ")) : null,
       !s.has_pin ? h("div", { class: "pay-flags" }, "No PIN set") : null,
+      s.keys && s.keys.length ? h("div", { class: s.active ? "meta" : "pay-flags" }, `🔑 Has: ${s.keys.join(", ")}`) : null,
       s.location_type === "onshore" && s.role !== "admin" ? h("label", { class: "check" },
         h("input", { type: "checkbox", checked: s.travel_eligible, onchange: async (e) => {
           try { await api(`/api/admin/staff/${s.staff_id}/travel`, { method: "POST", body: { on: e.target.checked } }); s.travel_eligible = e.target.checked; state.pay = null; }
@@ -802,12 +837,100 @@ async function renderStaffAdmin(reload = false) {
         h("div", { class: "meta" }, "Give it to them privately. It won't be shown again.")) : null,
       h("div", { class: "decide-btns", style: "margin-top:8px" },
         h("button", { class: "btn small secondary", onclick: act(s, "pin") }, "Reset PIN"),
-        s.staff_id === state.me.staff_id ? null : h("button", { class: "btn small secondary", onclick: act(s, "password") }, "Reset password")),
+        s.staff_id === state.me.staff_id ? null : h("button", { class: "btn small secondary", onclick: act(s, "password") }, "Reset password"),
+        s.staff_id === state.me.staff_id ? null : h("button", { class: "btn small secondary", onclick: async () => {
+          const leaving = s.active;
+          if (!confirm(leaving ? `Mark ${s.name} as left? They won't be able to log in.` : `Make ${s.name} active again?`)) return;
+          try {
+            const r = await api(`/api/admin/staff/${s.staff_id}/active`, { method: "POST", body: { active: !leaving } });
+            if (r.keys && r.keys.length) alert(`${s.name} still has: ${r.keys.join(", ")}. Collect them and mark them returned under Team → Keys.`);
+            await renderStaffAdmin(true);
+          } catch (ex) { alert(ex.message); }
+        } }, s.active ? "Mark as left" : "Make active")),
     )),
   );
 }
 
+// ---------- key register (admin) ----------
+
+async function renderKeys(reload = false) {
+  if (!state.keys || reload) {
+    render(teamSwitch(), h("p", { class: "loading" }, "Loading keys…"));
+    try { state.keys = await api("/api/admin/keys"); }
+    catch (ex) { return render(teamSwitch(), emptyCard("Couldn't load the key register", ex.message)); }
+  }
+  const K = state.keys;
+  const refresh = () => renderKeys(true);
+  const close = (iss, outcome) => async () => {
+    const words = { returned: "Mark as returned", lost: "Mark as LOST (the item is retired)", cancelled: "Cancel this (not accepted yet)" };
+    const note = prompt(`${words[outcome]}: ${iss.item} from ${iss.name}. Note (optional):`, "");
+    if (note === null) return;
+    try { await api(`/api/admin/keys/issues/${iss.id}/close`, { method: "POST", body: { outcome, note } }); refresh(); }
+    catch (ex) { alert(ex.message); }
+  };
+  const free = K.items.filter((i) => !i.current && !i.retired);
+  // Issue form
+  const who = h("select", { "aria-label": "Staff member" }, h("option", { value: "" }, "Give to…"),
+    K.people.map((p) => h("option", { value: p.staff_id }, `${p.name} (${p.staff_id})`)));
+  const picks = free.map((i) => ({ i, box: h("input", { type: "checkbox", "aria-label": i.label }) }));
+  const issueNote = h("input", { type: "text", maxlength: "300", placeholder: "Note (optional)" });
+  const issueBtn = h("button", { class: "btn small", onclick: async () => {
+    const ids = picks.filter((p) => p.box.checked).map((p) => p.i.id);
+    if (!who.value || !ids.length) return alert("Choose the person and at least one key or remote.");
+    issueBtn.disabled = true;
+    try { await api("/api/admin/keys/issue", { method: "POST", body: { staff_id: who.value, item_ids: ids, note: issueNote.value } }); refresh(); }
+    catch (ex) { alert(ex.message); issueBtn.disabled = false; }
+  } }, "Issue");
+  // Add form
+  const kind = h("select", { "aria-label": "Type" }, h("option", { value: "key" }, "Key"), h("option", { value: "remote" }, "Remote"));
+  const num = h("input", { type: "text", maxlength: "20", placeholder: "Number, e.g. 12", "aria-label": "Number" });
+  const desc = h("input", { type: "text", maxlength: "200", placeholder: "Description (optional), e.g. front door + alarm", "aria-label": "Description" });
+  const addBtn = h("button", { class: "btn small secondary", onclick: async () => {
+    if (!num.value.trim()) return alert("Enter the number.");
+    try { await api("/api/admin/keys", { method: "POST", body: { kind: kind.value, number: num.value, description: desc.value } }); refresh(); }
+    catch (ex) { alert(ex.message); }
+  } }, "Add to register");
+  const out = K.items.filter((i) => i.current);
+  render(
+    h("div", { class: "page-head" }, h("h1", {}, "Key register"),
+      h("div", { class: "updated" }, h("button", { class: "icon-btn", onclick: refresh }, "Refresh"))),
+    teamSwitch(),
+    K.leavers.length ? h("div", { class: "clash" }, h("b", {}, "Still with people who have left:"),
+      h("ul", { class: "clash-ul" }, K.leavers.map((l) => h("li", {}, `${l.name} — ${l.items.join(", ")}`)))) : null,
+    h("h2", { class: "month-title" }, `Out (${out.length})`),
+    out.length ? out.map((i) => h("article", { class: `leave-req st-${i.current.status === "held" ? "approved" : "pending"}` },
+      h("div", { class: "row1" }, h("b", {}, i.label), h("span", { class: `pill ${i.current.status === "held" ? "approved" : "pending"}` },
+        i.current.status === "held" ? "Signed for" : "Waiting to accept")),
+      h("div", {}, i.current.name),
+      h("div", { class: "meta" }, `Issued ${fmtDay(i.current.issued_at.slice(0, 10))} by ${i.current.issued_by}`
+        + (i.current.accepted_at ? ` · signed “${i.current.signed_name}” ${fmtDay(i.current.accepted_at.slice(0, 10))}` : "")),
+      i.current.note ? h("div", { class: "meta" }, i.current.note) : null,
+      h("div", { class: "decide-btns", style: "margin-top:8px" },
+        i.current.status === "held" ? h("button", { class: "btn small approve", onclick: close(i.current, "returned") }, "Returned")
+          : h("button", { class: "btn small secondary", onclick: close(i.current, "cancelled") }, "Cancel"),
+        h("button", { class: "btn small decline", onclick: close(i.current, "lost") }, "Lost")))) : emptyCard("Nothing is out"),
+    h("h2", { class: "month-title" }, "Issue keys / remotes"),
+    free.length ? h("div", { class: "card avail-card" }, who,
+      h("div", { class: "key-picks" }, picks.map((p) => h("label", { class: "check" }, p.box, " ", p.i.label))),
+      issueNote, h("div", { style: "margin-top:10px" }, issueBtn),
+      h("p", { class: "hint" }, "They'll get an email and must accept (read the terms and sign with their name) in the app."))
+      : h("p", { class: "hint" }, "Everything in the register is out — add more below."),
+    h("h2", { class: "month-title" }, "In the office"),
+    free.length ? h("div", { class: "card avail-card" }, h("ul", { class: "avail-dates" }, free.map((i) => h("li", {},
+      h("span", {}, i.label, i.history.length ? h("span", { class: "meta" }, ` · last with ${i.history[0].name}`) : null),
+      h("button", { class: "link-btn small", onclick: async () => {
+        if (!confirm(`Retire ${i.label}? (e.g. no longer used)`)) return;
+        try { await api(`/api/admin/keys/${i.id}/retire`, { method: "POST" }); refresh(); } catch (ex) { alert(ex.message); }
+      } }, "Retire"))))) : h("p", { class: "hint" }, "None."),
+    h("h2", { class: "month-title" }, "Add a key or remote"),
+    h("div", { class: "card avail-card" }, h("div", { class: "date-row" }, kind, num), desc, h("div", { style: "margin-top:10px" }, addBtn)),
+    K.items.some((i) => i.retired) ? [h("h2", { class: "month-title" }, "Retired / lost"),
+      h("p", { class: "hint" }, K.items.filter((i) => i.retired).map((i) => i.label).join(" · "))] : null,
+  );
+}
+
 function renderTeam() {
+  if (state.teamView === "keys") return renderKeys();
   if (state.teamView === "staff") return renderStaffAdmin();
   if (state.teamView === "availability") return renderTeamAvailability();
   const a = state.admin;
@@ -1902,7 +2025,7 @@ async function start() {
   state.avail = null; state.adminAvail = null; state.availDateOpen = false; state.availMsg = null; state.availAllClashes = false;
   state.staffList = null; state.staffReveal = null; state.newPin = null; state.pay = null; state.venues = null;
   state.expenses = null; state.expensesAdmin = null; state.expenseFormOpen = false; state.expenseMsg = null; state.leaveView = "leave";
-  state.incentiveDraft = null;
+  state.incentiveDraft = null; state.keys = null; state.myKeys = null;
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
   if (xeroReturn && state.me.role === "admin") {
