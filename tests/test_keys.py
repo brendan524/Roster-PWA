@@ -77,3 +77,15 @@ def test_leaver_with_keys_is_flagged(setup):
     reg = c.get("/api/admin/keys").json()
     assert reg["leavers"] == [{"staff_id": "AB0010", "name": "Sonya Wilkinson", "items": ["Key 12"]}]
     assert c.post("/api/admin/staff/AB0001/active", json={"active": False}).status_code == 400  # not yourself
+
+
+def test_restore_retired_or_lost(setup):
+    c = setup
+    key = ids(c)[0]
+    c.post("/api/admin/keys/issue", json={"staff_id": "AB0010", "item_ids": [key]})
+    iss = next(i for i in c.get("/api/admin/keys").json()["items"] if i["id"] == key)["current"]["id"]
+    c.post(f"/api/admin/keys/issues/{iss}/close", json={"outcome": "lost"})
+    assert c.post("/api/admin/keys/issue", json={"staff_id": "AB0010", "item_ids": [key]}).status_code == 409  # retired
+    r = c.post(f"/api/admin/keys/{key}/retire")  # found again: restore
+    assert r.status_code == 200 and r.json()["retired"] is False
+    assert c.post("/api/admin/keys/issue", json={"staff_id": "AB0010", "item_ids": [key]}).status_code == 200

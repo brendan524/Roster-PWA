@@ -925,7 +925,12 @@ async function renderKeys(reload = false) {
     h("h2", { class: "month-title" }, "Add a key or remote"),
     h("div", { class: "card avail-card" }, h("div", { class: "date-row" }, kind, num), desc, h("div", { style: "margin-top:10px" }, addBtn)),
     K.items.some((i) => i.retired) ? [h("h2", { class: "month-title" }, "Retired / lost"),
-      h("p", { class: "hint" }, K.items.filter((i) => i.retired).map((i) => i.label).join(" · "))] : null,
+      h("div", { class: "card avail-card" }, h("ul", { class: "avail-dates" }, K.items.filter((i) => i.retired).map((i) => h("li", {},
+        h("span", {}, i.label, i.history.length && i.history[0].status === "lost" ? h("span", { class: "meta" }, ` · lost by ${i.history[0].name}`) : null),
+        h("button", { class: "link-btn small", onclick: async () => {
+          if (!confirm(`Restore ${i.label}? It goes back to "In the office" and can be issued again.`)) return;
+          try { await api(`/api/admin/keys/${i.id}/retire`, { method: "POST" }); refresh(); } catch (ex) { alert(ex.message); }
+        } }, "Restore")))))] : null,
   );
 }
 
