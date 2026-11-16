@@ -105,6 +105,11 @@ def create_session(db: Session, staff: Staff, user_agent: str = "") -> str:
 
 
 def staff_for_token(db: Session, token: str | None) -> Staff | None:
+    found = session_for_token(db, token)
+    return found[1] if found else None
+
+
+def session_for_token(db: Session, token: str | None) -> tuple[AuthSession, Staff] | None:
     if not token:
         return None
     sess = db.get(AuthSession, _token_hash(token))
@@ -113,7 +118,18 @@ def staff_for_token(db: Session, token: str | None) -> Staff | None:
     staff = db.get(Staff, sess.staff_id)
     if staff is None or not staff.active:
         return None
-    return staff
+    return sess, staff
+
+
+def renew_session(db: Session, sess: AuthSession) -> bool:
+    """Sliding expiry: anyone who uses the app stays logged in. Pushes the expiry out
+    to a full SESSION_DAYS again, at most once a day. Returns True if it was renewed."""
+    days = get_settings().session_days
+    if sess.expires_at - now() > timedelta(days=days - 1):
+        return False
+    sess.expires_at = now() + timedelta(days=days)
+    db.commit()
+    return True
 
 
 def delete_session(db: Session, token: str | None) -> None:

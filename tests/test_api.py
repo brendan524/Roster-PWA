@@ -139,6 +139,35 @@ def test_logout(client, source):
     assert client.get("/api/auth/me").status_code == 401
 
 
+def test_active_session_is_renewed_so_staff_stay_logged_in(client, source):
+    from datetime import UTC, datetime, timedelta
+
+    from app.db import SessionLocal
+    from app.models import AuthSession
+
+    add_staff("AB0003", "sonya@example.com")
+    login(client, "sonya@example.com")
+    # A fresh login isn't renewed again on every request.
+    assert "set-cookie" not in client.get("/api/auth/me").headers
+
+    # Logged in 29 days ago: one day left. Using the app pushes it back out to 30 days.
+    with SessionLocal() as db:
+        db.query(AuthSession).update({"expires_at": datetime.now(UTC) + timedelta(days=1)})
+        db.commit()
+    r = client.get("/api/auth/me")
+    assert r.status_code == 200
+    assert "Max-Age=2592000" in r.headers["set-cookie"]
+    with SessionLocal() as db:
+        left = db.query(AuthSession).one().expires_at - datetime.now(UTC)
+    assert left > timedelta(days=29, hours=23)
+
+    # Expired is still expired.
+    with SessionLocal() as db:
+        db.query(AuthSession).update({"expires_at": datetime.now(UTC) - timedelta(minutes=1)})
+        db.commit()
+    assert client.get("/api/auth/me").status_code == 401
+
+
 def test_security_headers_and_static(client):
     r = client.get("/")
     assert r.status_code == 200

@@ -22,7 +22,7 @@ hr.abgroup.au ─► Traefik (existing) ─► roster-app (FastAPI + PWA) ─►
 | Shifts | Google Sheet, one tab per month (`10/2026` or `2026-10`). The app reads this month's and next month's tabs. It never writes to the sheet. |
 | Staff, logins, PINs | Postgres. Loaded once from a CSV, then the database is the source of truth. |
 
-- **Login** uses **Staff ID** (e.g. `AB0010`) or email, plus a password, and lets staff see their own roster on their phone. New staff get a temporary password and must change it the first time they log in. Five wrong attempts lock the account for 15 minutes.
+- **Login** uses **Staff ID** (e.g. `AB0010`) or email, plus a password, and lets staff see their own roster on their phone. New staff get a temporary password and must change it the first time they log in. Five wrong attempts lock the account for 15 minutes. A login lasts 30 days from the **last time the app was used** (it renews itself), so people who use it regularly stay logged in. If the server is briefly unreachable (e.g. during an update), the app shows the last saved copy or a "Trying again" screen. It never sends people back to the login screen unless their login has really ended.
 - **PIN** is the clock-in credential, issued now and used from Stage 2. Each PIN is unique to one person, so a kiosk can tell who is clocking in from the PIN alone.
 - **Privacy:** `/api/roster/me` filters to the logged-in Staff ID on the server. Staff never receive anyone else's shifts or the sheet issues list. Tests enforce this.
 - **Fail loud:** if a sheet row has an unknown Staff ID, a bad date or time, or a missing field, that row shows up on the admin **Sheet issues** tab with its tab name and row number. It is never silently dropped.

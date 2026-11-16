@@ -1,21 +1,39 @@
 from functools import lru_cache
 
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, Response
 from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
 from app.models import Staff
 from app.roster import CsvDirectorySource, GoogleSheetsSource, RosterService
-from app.security import staff_for_token
+from app.security import renew_session, session_for_token
 
 COOKIE_NAME = "ab_session"
 
 
-def current_staff(request: Request, db: Session = Depends(get_db)) -> Staff:
-    staff = staff_for_token(db, request.cookies.get(COOKIE_NAME))
-    if staff is None:
+def set_session_cookie(response: Response, token: str) -> None:
+    s = get_settings()
+    response.set_cookie(
+        COOKIE_NAME,
+        token,
+        max_age=s.session_days * 86400,
+        httponly=True,
+        secure=s.cookie_secure,
+        samesite="lax",
+        path="/",
+    )
+
+
+def current_staff(request: Request, response: Response, db: Session = Depends(get_db)) -> Staff:
+    token = request.cookies.get(COOKIE_NAME)
+    found = session_for_token(db, token)
+    if found is None:
         raise HTTPException(401, "Please log in.")
+    sess, staff = found
+    if renew_session(db, sess):
+        # Fresh cookie too, so the browser doesn't drop it at the old expiry.
+        set_session_cookie(response, token)
     return staff
 
 

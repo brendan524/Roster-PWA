@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 
 from app.config import get_settings
 from app.db import get_db
-from app.deps import COOKIE_NAME, current_staff, ready_staff
+from app.deps import COOKIE_NAME, current_staff, ready_staff, set_session_cookie
 from app.models import Staff
 from app.security import (
     create_session,
@@ -47,19 +47,6 @@ def me_payload(staff: Staff) -> dict:
     }
 
 
-def _set_cookie(response: Response, token: str) -> None:
-    s = get_settings()
-    response.set_cookie(
-        COOKIE_NAME,
-        token,
-        max_age=s.session_days * 86400,
-        httponly=True,
-        secure=s.cookie_secure,
-        samesite="lax",
-        path="/",
-    )
-
-
 def authenticate(db: Session, login_id: str, password: str) -> Staff:
     """Check a Staff ID/email + password, with lockout. Raises HTTPException on failure."""
     s = get_settings()
@@ -92,7 +79,7 @@ def authenticate(db: Session, login_id: str, password: str) -> Staff:
 def login(body: LoginIn, request: Request, response: Response, db: Session = Depends(get_db)):
     staff = authenticate(db, body.login, body.password)
     token = create_session(db, staff, request.headers.get("user-agent", ""))
-    _set_cookie(response, token)
+    set_session_cookie(response, token)
     return me_payload(staff)
 
 

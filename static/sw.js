@@ -5,7 +5,7 @@
      marked with x-ab-offline so the app can say so. Cleared on logout.
    - Everything else under /api (logins, admin data) is never cached. */
 
-const VERSION = "v31";
+const VERSION = "v32";
 const SHELL = `ab-shell-${VERSION}`;
 const DATA = "ab-data"; // personal roster cache; wiped on logout
 const SHELL_FILES = ["/", "/app.css", "/app.js", "/manifest.webmanifest",
@@ -53,6 +53,7 @@ async function shellNetworkFirst(req) {
   try {
     const res = await fetch(req, { cache: "no-cache" });  // always check the server, not the phone's HTTP cache
     if (res.ok && !res.redirected) (await caches.open(SHELL)).put(key, res.clone());
+    else if (serverDown(res)) return (await caches.match(key)) || res;  // mid-update: open the saved app
     return res;
   } catch {
     return (await caches.match(key)) || (await caches.match("/")) || Response.error();
@@ -66,12 +67,23 @@ async function apiNetworkFirst(req, url) {
     const cache = await caches.open(DATA);
     if (res.ok) await cache.put(key, res.clone());
     else if (res.status === 401 || res.status === 403) await caches.delete(DATA);
-    return res;
+    if (!serverDown(res)) return res;
+    // The server is restarting (an update) or the gateway can't reach it: treat it like
+    // being offline, so people see their last copy rather than an error or the login screen.
+    const hit = await cache.match(key);
+    return hit ? offlineCopy(hit) : res;
   } catch {
     const hit = await (await caches.open(DATA)).match(key);
-    if (!hit) return Response.error();
-    const headers = new Headers(hit.headers);
-    headers.set("x-ab-offline", "1");
-    return new Response(await hit.blob(), { status: 200, headers });
+    return hit ? offlineCopy(hit) : Response.error();
   }
+}
+
+// 5xx, or the 404 Traefik gives while the app container is down (our own pages and these
+// API paths never 404).
+function serverDown(res) { return res.status >= 500 || res.status === 404; }
+
+async function offlineCopy(hit) {
+  const headers = new Headers(hit.headers);
+  headers.set("x-ab-offline", "1");
+  return new Response(await hit.blob(), { status: 200, headers });
 }

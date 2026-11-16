@@ -2047,14 +2047,26 @@ async function start() {
   }
 }
 
+// Only a real "not logged in" (401) shows the login screen. Anything else (the server
+// restarting during an update, a gateway error, no signal and nothing saved) keeps the
+// person logged in and tries again, instead of looking like they were logged out.
+let bootRetry = null;
 async function boot() {
+  clearTimeout(bootRetry); bootRetry = null;
   try {
     state.me = await api("/api/auth/me");
-    await start();
   } catch (ex) {
-    renderLogin(ex.status === 0 ? ex.message : null);
+    if (ex.status === 401) return renderLogin();
+    setChrome(false);
+    render(h("div", { class: "empty" }, h("strong", {}, "Can't reach the staff app right now"),
+      ex.status === 0 ? ex.message : "The server is busy or updating. Trying again…",
+      h("button", { class: "btn", onclick: () => boot() }, "Try again")));
+    bootRetry = setTimeout(boot, 10000);
+    return;
   }
+  await start();
 }
+window.addEventListener("online", () => { if (bootRetry) boot(); });
 
 document.getElementById("username").addEventListener("click", () => {
   if (!state.me || state.me.must_change_password) return;
