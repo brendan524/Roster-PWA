@@ -153,32 +153,41 @@ def workspaces(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db
                               for o in orgs if by_org.get(o["id"])]}
 
 
+MAX_COLUMNS = 40
+
+
+def _card(r: dict) -> dict:
+    return {
+        "id": r["id"], "title": r["title"], "done": r["done"], "due": r.get("duedAt"), "start": r.get("startedAt"),
+        "comments": r.get("commentCount", 0), "checklist": [r.get("checklistCompletedCount", 0), r.get("checklistCount", 0)],
+        "tags": [{"title": t["title"], "color": t.get("color")} for t in r.get("tags") or []],
+        "people": [u["fullName"] for u in r.get("users") or []],
+    }
+
+
 @router.get("/workspaces/{org_id}/{workspace_id}")
 def board(org_id: str, workspace_id: str, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db),
           http=Depends(get_http)):
-    """A workspace's records, grouped into its lists (board columns)."""
+    """A workspace as a board: one column per list, in Blue's order, each column's records in
+    Blue's top-to-bottom order. Blue only sorts by its manual order within a single list, so
+    each list is read on its own; records outside every list go in a final "No list" column."""
     org_id, workspace_id = _id(org_id), _id(workspace_id)
-    data = _run(db, http, staff, "Board", {"orgId": org_id, "workspaceId": workspace_id},
-                headers={"blue-org-id": org_id, "blue-workspace-id": workspace_id})
-    ws, todos = data["workspace"], data["recordQueries"]["todos"]
-    columns = [{"id": l["id"], "title": l["title"], "records": []} for l in ws.get("todoLists") or []]
-    col = {c["id"]: c for c in columns}
-    other = {"id": "", "title": "No list", "records": []}
-    # Blue only sorts by its manual "rank" within one list, so the query spans the workspace
-    # in creation order and each column is put in board order here: rank is an opaque string
-    # compared only within its own list, highest first (Blue's top-to-bottom order).
-    items = sorted(todos["items"], key=lambda r: r.get("rank") or "", reverse=True)
-    for r in items:
-        (col.get((r.get("todoList") or {}).get("id")) or other)["records"].append({
-            "id": r["id"], "title": r["title"], "done": r["done"], "due": r.get("duedAt"), "start": r.get("startedAt"),
-            "comments": r.get("commentCount", 0), "checklist": [r.get("checklistCompletedCount", 0), r.get("checklistCount", 0)],
-            "tags": [{"title": t["title"], "color": t.get("color")} for t in r.get("tags") or []],
-            "people": [u["fullName"] for u in r.get("users") or []],
-        })
-    if other["records"]:
-        columns.append(other)
-    return {"id": ws["id"], "name": ws["name"], "color": ws.get("color"), "columns": columns,
-            "truncated": bool(todos["pageInfo"].get("hasNextPage"))}
+    hdrs = {"blue-org-id": org_id, "blue-workspace-id": workspace_id}
+    lists = [l for l in _run(db, http, staff, "Lists", {"workspaceId": workspace_id}, hdrs)["recordLists"]
+             if not l.get("isDisabled")]
+    lists.sort(key=lambda l: l.get("rank") or "")  # opaque keys, but they order lists within one workspace
+    columns, truncated = [], len(lists) > MAX_COLUMNS
+    for l in lists[:MAX_COLUMNS]:
+        todos = _run(db, http, staff, "ListRecords", {"orgId": org_id, "workspaceId": workspace_id, "listId": l["id"]},
+                     hdrs)["recordQueries"]["todos"]
+        truncated = truncated or bool(todos["pageInfo"].get("hasNextPage"))
+        columns.append({"id": l["id"], "title": (l["title"] or "").strip() or "Untitled", "records": [_card(r) for r in todos["items"]]})
+    rest = _run(db, http, staff, "UnlistedRecords",
+                {"orgId": org_id, "workspaceId": workspace_id, "notListIds": [l["id"] for l in lists]}, hdrs)["recordQueries"]["todos"]
+    if rest["items"]:
+        truncated = truncated or bool(rest["pageInfo"].get("hasNextPage"))
+        columns.append({"id": "", "title": "No list" if lists else "Records", "records": [_card(r) for r in rest["items"]]})
+    return {"id": workspace_id, "columns": columns, "truncated": truncated}
 
 
 def _comment_out(c: dict) -> dict:

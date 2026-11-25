@@ -51,22 +51,37 @@ OPERATIONS = {
     items { id name slug color icon company { id name } }
   }
 }""",
-    "Board": """query Board($orgId: String!, $workspaceId: String!) {
-  workspace(id: $workspaceId) {
-    id name color company { id }
-    todoLists(orderBy: position_ASC, first: 100) { id title }
-  }
+    # A workspace's lists (board columns), in Blue's board order.
+    "Lists": """query Lists($workspaceId: String!) {
+  recordLists(projectId: $workspaceId) { id title rank isDisabled }
+}""",
+    # One list's records in board order: Blue only rank-sorts within exactly one list.
+    "ListRecords": """query ListRecords($orgId: String!, $workspaceId: String!, $listId: String!) {
   recordQueries {
-    todos(filter: { companyIds: [$orgId], projectIds: [$workspaceId] }, sort: [createdAt_ASC], limit: 500) {
-      items {
-        id rank title done duedAt startedAt commentCount checklistCount checklistCompletedCount
-        todoList { id }
-        tags { id title color }
-        users { id fullName }
-      }
-      pageInfo { hasNextPage totalItems }
+    todos(filter: { companyIds: [$orgId], projectIds: [$workspaceId], todoListIds: [$listId] }, sort: [rank_DESC], limit: 200) {
+      items { ...Card }
+      pageInfo { hasNextPage }
     }
   }
+}
+fragment Card on Record {
+  id title done duedAt startedAt commentCount checklistCount checklistCompletedCount
+  tags { id title color }
+  users { id fullName }
+}""",
+    # Records outside every list (or all records, for a workspace with no lists).
+    "UnlistedRecords": """query UnlistedRecords($orgId: String!, $workspaceId: String!, $notListIds: [String!]!) {
+  recordQueries {
+    todos(filter: { companyIds: [$orgId], projectIds: [$workspaceId], notTodoListIds: $notListIds }, sort: [createdAt_ASC], limit: 200) {
+      items { ...Card }
+      pageInfo { hasNextPage }
+    }
+  }
+}
+fragment Card on Record {
+  id title done duedAt startedAt commentCount checklistCount checklistCompletedCount
+  tags { id title color }
+  users { id fullName }
 }""",
     "Record": """query Record($id: String!) {
   record(id: $id) {

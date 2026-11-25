@@ -133,25 +133,30 @@ class FakeBlue:
             return R(200, {"data": {"organizations": {"items": self.orgs[user]}}})
         if op == "Workspaces":
             return R(200, {"data": {"workspaceList": {"items": [w for w in self.workspaces[user] if w["company"]["id"] in v["orgIds"]]}}})
-        if op == "Board":
-            # Blue: "A rank sort must be the only sort and the filter must resolve to exactly one list."
-            if "rank_" in json["query"].split("todos(")[1].split(")")[0] and "todoListIds" not in json["query"]:
-                return R(200, {"errors": [{"message": "Rank ordering requires exactly one record list.",
-                                           "extensions": {"code": "BAD_USER_INPUT"}}]})
+        if op in ("Lists", "ListRecords", "UnlistedRecords"):
             if v["workspaceId"] not in {w["id"] for w in self.workspaces[user]}:
                 return R(200, {"errors": [{"message": "nope", "extensions": {"code": "FORBIDDEN"}}]})
-            return R(200, {"data": {
-                "workspace": {"id": "w1", "name": "First Aid Courses", "color": "#00f", "company": {"id": "o1"},
-                              "todoLists": [{"id": "l1", "title": "Mon 1 Dec"}, {"id": "l2", "title": "Tue 2 Dec"}]},
-                "recordQueries": {"todos": {"items": [
-                    {"id": "r1", "rank": "0|i00000:", "title": "HLTAID011 — Acme", "done": False, "duedAt": "2026-12-01T00:00:00Z", "startedAt": None,
-                     "commentCount": 1, "checklistCount": 2, "checklistCompletedCount": 1, "todoList": {"id": "l1"},
-                     "tags": [{"id": "t1", "title": "Onsite", "color": "#f00"}], "users": [{"id": "u1", "fullName": "Sonya Blue"}]},
-                    {"id": "r3", "rank": "0|hzzzzz:", "title": "Second in Mon", "done": False, "duedAt": None, "startedAt": None,
-                     "commentCount": 0, "checklistCount": 0, "checklistCompletedCount": 0, "todoList": {"id": "l1"}, "tags": [], "users": []},
-                    {"id": "r2", "title": "Loose record", "done": True, "duedAt": None, "startedAt": None, "commentCount": 0,
-                     "checklistCount": 0, "checklistCompletedCount": 0, "todoList": None, "tags": [], "users": []},
-                ], "pageInfo": {"hasNextPage": False, "totalItems": 2}}}}})
+            # Blue: "A rank sort must be the only sort and the filter must resolve to exactly one list."
+            if "rank_" in json["query"] and "todoListIds: [$listId]" not in json["query"]:
+                return R(200, {"errors": [{"message": "Rank ordering requires exactly one record list.",
+                                           "extensions": {"code": "BAD_USER_INPUT"}}]})
+            card = lambda i, t, **kw: {"id": i, "title": t, "done": False, "duedAt": None, "startedAt": None, "commentCount": 0,
+                                      "checklistCount": 0, "checklistCompletedCount": 0, "tags": [], "users": [], **kw}
+            in_list = {  # already in Blue's board order (rank_DESC)
+                "l1": [card("r1", "HLTAID011 — Acme", duedAt="2026-12-01T00:00:00Z", commentCount=1, checklistCount=2,
+                            checklistCompletedCount=1, tags=[{"id": "t1", "title": "Onsite", "color": "#f00"}],
+                            users=[{"id": "u1", "fullName": "Sonya Blue"}]),
+                       card("r3", "Second in Mon")],
+                "l2": [], "l3": [card("r9", "Hidden list record")]}
+            if op == "Lists":
+                return R(200, {"data": {"recordLists": [  # deliberately not in rank order
+                    {"id": "l2", "title": "Tuesday ", "rank": "a1", "isDisabled": False},
+                    {"id": "l3", "title": "Old", "rank": "a2", "isDisabled": True},
+                    {"id": "l1", "title": "Monday ", "rank": "a0", "isDisabled": False}]}})
+            if op == "ListRecords":
+                return R(200, {"data": {"recordQueries": {"todos": {"items": in_list[v["listId"]], "pageInfo": {"hasNextPage": False}}}}})
+            loose = [card("r2", "Loose record", done=True)] if set(v["notListIds"]) >= {"l1", "l2"} else []
+            return R(200, {"data": {"recordQueries": {"todos": {"items": loose, "pageInfo": {"hasNextPage": False}}}}})
         if op == "Record":
             fields = [{"id": "f1", "name": "Venue", "type": "TEXT_SINGLE", "value": "Melton", "viewable": True},
                       {"id": "f2", "name": "Pay rate", "type": "CURRENCY", "value": 55, "viewable": user == "u1"}]
@@ -378,15 +383,20 @@ def test_workspaces_lists_only_what_the_person_belongs_to(client, source, fake):
 def test_board_groups_records_into_lists(sonya, fake):
     connect(sonya, fake)
     b = sonya.get("/api/blue/workspaces/o1/w1").json()
-    assert [c["title"] for c in b["columns"]] == ["Mon 1 Dec", "Tue 2 Dec", "No list"]
-    # Board order within a list = highest rank first (r3 was created later but ranks lower).
-    assert [r["id"] for r in b["columns"][0]["records"]] == ["r1", "r3"]
+    # Lists in Blue's order (by rank), disabled lists left out, titles trimmed; listless records last.
+    assert [c["title"] for c in b["columns"]] == ["Monday", "Tuesday", "No list"]
+    assert [r["id"] for r in b["columns"][0]["records"]] == ["r1", "r3"]  # Blue's top-to-bottom order
+    assert b["columns"][1]["records"] == [] and b["truncated"] is False
     card = b["columns"][0]["records"][0]
     assert card == {"id": "r1", "title": "HLTAID011 — Acme", "done": False, "due": "2026-12-01T00:00:00Z", "start": None,
                     "comments": 1, "checklist": [1, 2], "tags": [{"title": "Onsite", "color": "#f00"}], "people": ["Sonya Blue"]}
-    op, v, headers, user = fake.calls[-1]
-    assert op == "Board" and v == {"orgId": "o1", "workspaceId": "w1"} and user == "u1"
-    assert headers["blue-org-id"] == "o1" and headers["blue-workspace-id"] == "w1"
+    ops = [(op, v) for (op, v, _, _) in fake.calls if op in ("Lists", "ListRecords", "UnlistedRecords")]
+    assert ops == [("Lists", {"workspaceId": "w1"}),
+                   ("ListRecords", {"orgId": "o1", "workspaceId": "w1", "listId": "l1"}),
+                   ("ListRecords", {"orgId": "o1", "workspaceId": "w1", "listId": "l2"}),
+                   ("UnlistedRecords", {"orgId": "o1", "workspaceId": "w1", "notListIds": ["l1", "l2"]})]
+    _, _, headers, user = fake.calls[-1]
+    assert user == "u1" and headers["blue-org-id"] == "o1" and headers["blue-workspace-id"] == "w1"
 
 
 def test_board_blue_refuses_shows_an_error_not_a_logout(sonya, fake):

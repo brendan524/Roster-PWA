@@ -390,8 +390,8 @@ async function renderBlueBoard(nav, force) {
   const cols = b.columns.filter((c) => c.records.length || c.id);
   render(
     blueBack("‹ All workspaces", { view: "list" }),
-    pageHead(b.name, b, () => renderBlueBoard(nav, true)),
-    b.truncated ? h("p", { class: "hint" }, "Showing the first 500 records.") : null,
+    pageHead(nav.name, b, () => renderBlueBoard(nav, true)),
+    b.truncated ? h("p", { class: "hint" }, "Some records aren't shown (over 200 in a list). Open Blue to see them all.") : null,
     cols.length ? h("div", { class: "kanban" }, cols.map((c) => h("section", { class: "kcol" },
       h("div", { class: "kcol-head" }, h("b", {}, c.title), h("span", { class: "meta" }, String(c.records.length))),
       c.records.length ? c.records.map((r) => blueCardEl(r, nav)) : h("p", { class: "hint" }, "Nothing here.")))) :
