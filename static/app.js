@@ -582,9 +582,10 @@ function renderTabbar() {
   if (state.me.role !== "admin") {
     // Contractors take no leave, so they only have their shifts (no tab bar needed).
     const claimsLabel = state.me.location_type === "offshore" ? "Claims" : "Expenses";
-    const blueTab = state.me.blue_enabled ? tab("blue", "To do") : null;
-    if (state.me.has_leave === false) { tabbar.replaceChildren(tab("mine", "My shifts"), tab("expenses", claimsLabel), blueTab || ""); return; }
-    tabbar.replaceChildren(tab("mine", "My shifts"), tab("leave", "Leave"), tab("expenses", claimsLabel), blueTab || "");
+    // Staff: the everyday tabs first (shifts, to-dos), then leave and expenses.
+    const blueTab = state.me.blue_enabled ? tab("blue", "To do") : "";
+    if (state.me.has_leave === false) { tabbar.replaceChildren(tab("mine", "My shifts"), blueTab, tab("expenses", claimsLabel)); return; }
+    tabbar.replaceChildren(tab("mine", "My shifts"), blueTab, tab("leave", "Leave"), tab("expenses", claimsLabel));
     return;
   }
   tabbar.replaceChildren(
