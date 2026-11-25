@@ -56,9 +56,13 @@ class FakeBlue:
         # u1 is in two orgs; u2 only in one, and can't see the "Pay rate" field.
         self.orgs = {"u1": [{"id": "o1", "name": "AB Group", "slug": "ab"}, {"id": "o2", "name": "Side Org", "slug": "side"}],
                      "u2": [{"id": "o1", "name": "AB Group", "slug": "ab"}]}
-        self.workspaces = {"u1": [{"id": "w1", "name": "First Aid Courses", "slug": "fa", "color": "#00f", "icon": None, "company": {"id": "o1", "name": "AB Group"}},
-                                  {"id": "w2", "name": "Gym Tasks", "slug": "gym", "color": None, "icon": None, "company": {"id": "o1", "name": "AB Group"}}],
-                           "u2": [{"id": "w2", "name": "Gym Tasks", "slug": "gym", "color": None, "icon": None, "company": {"id": "o1", "name": "AB Group"}}]}
+        fa = {"id": "f1", "title": "AB First Aid", "position": 900.5, "color": "#66d37e"}
+        gym = {"id": "f2", "title": "AB Health and Fitness", "position": 100.0, "color": "#4a9fff"}
+        org = {"id": "o1", "name": "AB Group"}
+        self.workspaces = {"u1": [{"id": "w1", "name": "First Aid Courses", "slug": "fa", "color": "#00f", "icon": None, "company": org, "folder": fa},
+                                  {"id": "w3", "name": "Loose Board", "slug": "loose", "color": None, "icon": None, "company": org, "folder": None},
+                                  {"id": "w2", "name": "Gym Tasks", "slug": "gym", "color": None, "icon": None, "company": org, "folder": gym}],
+                           "u2": [{"id": "w2", "name": "Gym Tasks", "slug": "gym", "color": None, "icon": None, "company": org, "folder": gym}]}
         self.checklist_done = {"i1": False, "i2": True}
         self.comments = [{"id": "c1", "text": "Booked the room", "createdAt": "2026-11-20T01:00:00Z", "user": {"id": "u2", "fullName": "Dan Blue"}}]
 
@@ -370,13 +374,19 @@ def test_workspaces_lists_only_what_the_person_belongs_to(client, source, fake):
     login(client, "sonya@example.com")
     connect(client, fake, "u1")
     body = client.get("/api/blue/workspaces").json()
-    assert body == {"organizations": [{"id": "o1", "name": "AB Group", "workspaces": [
-        {"id": "w1", "name": "First Aid Courses", "color": "#00f", "icon": None},
-        {"id": "w2", "name": "Gym Tasks", "color": None, "icon": None}]}]}  # Side Org has none -> left out
+    # Grouped like Blue's sidebar: folders by position, then workspaces outside any folder.
+    # Side Org has no workspaces for Sonya, so it's left out.
+    assert body == {"organizations": [{"id": "o1", "name": "AB Group", "groups": [
+        {"id": "f2", "title": "AB Health and Fitness", "color": "#4a9fff",
+         "workspaces": [{"id": "w2", "name": "Gym Tasks", "color": None, "icon": None}]},
+        {"id": "f1", "title": "AB First Aid", "color": "#66d37e",
+         "workspaces": [{"id": "w1", "name": "First Aid Courses", "color": "#00f", "icon": None}]},
+        {"id": "", "title": None, "color": None,
+         "workspaces": [{"id": "w3", "name": "Loose Board", "color": None, "icon": None}]}]}]}
     client.post("/api/auth/logout")
     login(client, "dan@example.com")
     connect(client, fake, "u2")
-    names = [w["name"] for o in client.get("/api/blue/workspaces").json()["organizations"] for w in o["workspaces"]]
+    names = [w["name"] for o in client.get("/api/blue/workspaces").json()["organizations"] for g in o["groups"] for w in g["workspaces"]]
     assert names == ["Gym Tasks"]
 
 
@@ -391,10 +401,9 @@ def test_board_groups_records_into_lists(sonya, fake):
     assert card == {"id": "r1", "title": "HLTAID011 — Acme", "done": False, "due": "2026-12-01T00:00:00Z", "start": None,
                     "comments": 1, "checklist": [1, 2], "tags": [{"title": "Onsite", "color": "#f00"}], "people": ["Sonya Blue"]}
     ops = [(op, v) for (op, v, _, _) in fake.calls if op in ("Lists", "ListRecords", "UnlistedRecords")]
-    assert ops == [("Lists", {"workspaceId": "w1"}),
-                   ("ListRecords", {"orgId": "o1", "workspaceId": "w1", "listId": "l1"}),
-                   ("ListRecords", {"orgId": "o1", "workspaceId": "w1", "listId": "l2"}),
-                   ("UnlistedRecords", {"orgId": "o1", "workspaceId": "w1", "notListIds": ["l1", "l2"]})]
+    assert ops[0] == ("Lists", {"workspaceId": "w1"})  # list reads run side by side, in any order
+    assert sorted(v["listId"] for op, v in ops if op == "ListRecords") == ["l1", "l2"]
+    assert ops[-1] == ("UnlistedRecords", {"orgId": "o1", "workspaceId": "w1", "notListIds": ["l1", "l2"]})
     _, _, headers, user = fake.calls[-1]
     assert user == "u1" and headers["blue-org-id"] == "o1" and headers["blue-workspace-id"] == "w1"
 

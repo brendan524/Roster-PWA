@@ -48,7 +48,7 @@ OPERATIONS = {
     "Workspaces": """query Workspaces($orgIds: [String!]!) {
   workspaceList(filter: { companyIds: $orgIds, inProject: true, archived: false, isTemplate: false },
                 sort: [position_ASC], take: 200) {
-    items { id name slug color icon company { id name } }
+    items { id name slug color icon company { id name } folder { id title position color } }
   }
 }""",
     # A workspace's lists (board columns), in Blue's board order.
@@ -335,6 +335,22 @@ def call(db: Session, http, staff_id: str, op: str, variables: dict | None = Non
 
 # The sign-in in progress (anti-forgery state + PKCE verifier) rides in a short-lived,
 # HTTP-only cookie. Both are URL-safe base64, so "." can't appear inside either.
+def call_many(db: Session, http, staff_id: str, calls: list[tuple[str, dict]], headers: dict | None = None,
+              workers: int = 6) -> list[dict]:
+    """Run several OPERATIONS as this person side by side (one token, fetched once).
+    If Blue rejects the token, fall back to one-by-one calls, which refresh or ask to reconnect."""
+    from concurrent.futures import ThreadPoolExecutor
+
+    if not calls:
+        return []
+    token = access_token(db, http, staff_id)
+    try:
+        with ThreadPoolExecutor(max_workers=min(workers, len(calls))) as pool:
+            return list(pool.map(lambda c: _graphql(http, token, c[0], c[1], headers), calls))
+    except _Unauthenticated:
+        return [call(db, http, staff_id, op, v, headers) for op, v in calls]
+
+
 def pack_pending(state: str, verifier: str) -> str:
     return f"{state}.{verifier}"
 

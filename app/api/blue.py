@@ -145,12 +145,24 @@ def workspaces(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db
     if not orgs:
         return {"organizations": []}
     items = _run(db, http, staff, "Workspaces", {"orgIds": [o["id"] for o in orgs]})["workspaceList"]["items"]
-    by_org: dict[str, list] = {}
-    for w in items:
-        by_org.setdefault(w["company"]["id"], []).append(
-            {"id": w["id"], "name": w["name"], "color": w.get("color"), "icon": w.get("icon")})
-    return {"organizations": [{"id": o["id"], "name": o["name"], "workspaces": by_org[o["id"]]}
-                              for o in orgs if by_org.get(o["id"])]}
+    # Grouped like Blue's sidebar: folders in Blue's order, then workspaces not in a folder.
+    out = []
+    for o in orgs:
+        folders: dict[str, dict] = {}
+        loose = {"id": "", "title": None, "color": None, "position": float("inf"), "workspaces": []}
+        for w in items:
+            if w["company"]["id"] != o["id"]:
+                continue
+            f = w.get("folder")
+            group = loose if not f else folders.setdefault(f["id"], {
+                "id": f["id"], "title": f["title"], "color": f.get("color"), "position": f.get("position") or 0, "workspaces": []})
+            group["workspaces"].append({"id": w["id"], "name": w["name"], "color": w.get("color"), "icon": w.get("icon")})
+        groups = sorted(folders.values(), key=lambda g: g["position"]) + ([loose] if loose["workspaces"] else [])
+        for g in groups:
+            g.pop("position")
+        if groups:
+            out.append({"id": o["id"], "name": o["name"], "groups": groups})
+    return {"organizations": out}
 
 
 MAX_COLUMNS = 40
@@ -177,9 +189,16 @@ def board(org_id: str, workspace_id: str, staff: Staff = Depends(ready_staff), d
              if not l.get("isDisabled")]
     lists.sort(key=lambda l: l.get("rank") or "")  # opaque keys, but they order lists within one workspace
     columns, truncated = [], len(lists) > MAX_COLUMNS
-    for l in lists[:MAX_COLUMNS]:
-        todos = _run(db, http, staff, "ListRecords", {"orgId": org_id, "workspaceId": workspace_id, "listId": l["id"]},
-                     hdrs)["recordQueries"]["todos"]
+    lists = lists[:MAX_COLUMNS]
+    try:  # every list at once, as this person
+        results = blue.call_many(db, http, staff.staff_id, [
+            ("ListRecords", {"orgId": org_id, "workspaceId": workspace_id, "listId": l["id"]}) for l in lists], hdrs)
+    except blue.BlueReconnect:
+        raise HTTPException(RECONNECT, "Please connect Blue again.") from None
+    except blue.BlueError as e:
+        raise HTTPException(502, str(e)) from None
+    for l, res in zip(lists, results):
+        todos = res["recordQueries"]["todos"]
         truncated = truncated or bool(todos["pageInfo"].get("hasNextPage"))
         columns.append({"id": l["id"], "title": (l["title"] or "").strip() or "Untitled", "records": [_card(r) for r in todos["items"]]})
     rest = _run(db, http, staff, "UnlistedRecords",

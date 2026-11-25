@@ -406,3 +406,11 @@ table.bookings a { color: var(--blue-dark); font-weight: 700; }
 .blue-comment p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
 .blue-comment-box { width: 100%; box-sizing: border-box; margin-top: 10px; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 10px; font: inherit; resize: vertical; }
 .blue-comments .btn { margin-top: 10px; }
+.blue-folder { margin-bottom: 8px; }
+.blue-folder summary { display: flex; align-items: center; gap: 10px; padding: 12px 6px; cursor: pointer; list-style: none; font-weight: 900; font-size: 15px; }
+.blue-folder summary::-webkit-details-marker { display: none; }
+.blue-folder summary::after { content: "›"; margin-left: 6px; color: var(--muted); font-size: 20px; line-height: 1; transition: transform .15s; }
+.blue-folder[open] summary::after { transform: rotate(90deg); }
+.blue-folder-dot { width: 14px; height: 14px; border-radius: 4px; background: var(--muted); flex: none; }
+.blue-folder-name { flex: 1; }
+.blue-folder-body { padding-left: 12px; border-left: 3px solid var(--line); margin-left: 12px; }

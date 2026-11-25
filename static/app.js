@@ -371,11 +371,30 @@ async function renderBlueList(force) {
     blueFlash(),
     orgs.length ? orgs.map((o) => h("section", { class: "blue-org" },
       orgs.length > 1 ? h("h2", { class: "blue-org-name" }, o.name) : null,
-      o.workspaces.map((w) => h("button", { class: "blue-ws", onclick: () => blueGo({ view: "board", org: o.id, ws: w.id, name: w.name }) },
-        h("span", { class: "blue-dot", style: blueBg(w.color) }),
-        h("span", { class: "blue-ws-name" }, w.name), h("span", { class: "blue-chev" }, "›")))))
+      o.groups.map((g) => blueFolder(o, g, o.groups.length === 1))))
       : h("div", { class: "empty" }, h("strong", {}, "No workspaces yet"), "You aren't a member of any Blue workspaces."),
   );
+}
+
+function blueWsButton(o, w) {
+  return h("button", { class: "blue-ws", onclick: () => blueGo({ view: "board", org: o.id, ws: w.id, name: w.name }) },
+    h("span", { class: "blue-dot", style: blueBg(w.color) }),
+    h("span", { class: "blue-ws-name" }, w.name), h("span", { class: "blue-chev" }, "›"));
+}
+
+// A folder, like Blue's sidebar: opens and closes, and remembers which you left open.
+function blueFolder(o, g, onlyOne) {
+  const key = `blueFolder.${o.id}.${g.id || "none"}`;
+  const saved = localGet(key);
+  const open = saved === null ? onlyOne : saved === "1";
+  const el = h("details", { class: "blue-folder", open },
+    h("summary", {},
+      h("span", { class: "blue-folder-dot", style: blueBg(g.color) }),
+      h("span", { class: "blue-folder-name" }, g.title || "Not in a folder"),
+      h("span", { class: "meta" }, String(g.workspaces.length))),
+    h("div", { class: "blue-folder-body" }, g.workspaces.map((w) => blueWsButton(o, w))));
+  el.addEventListener("toggle", () => localSet(key, el.open ? "1" : "0"));
+  return el;
 }
 
 async function renderBlueBoard(nav, force) {
