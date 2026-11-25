@@ -332,7 +332,7 @@ function blueNeedsConnect(ex) { return ex && ex.status === 409; }
 function blueConnectScreen(reconnect) {
   return h("div", { class: "card account" }, h("b", {}, "Blue"),
     h("p", {}, reconnect ? "Your Blue connection has ended (it may have been removed in Blue). Connect again to see your boards."
-      : "Connect your Blue account once to see your Blue workspaces here."),
+      : "Your to-dos come from Blue. Connect your Blue account once to see your boards here."),
     h("a", { class: "btn", style: "margin-top:10px", href: "/api/blue/connect" }, reconnect ? "Reconnect Blue" : "Connect Blue"));
 }
 
@@ -352,22 +352,22 @@ async function renderBlue(force) {
     return await renderBlueList(force);
   } catch (ex) {
     if (state.tab !== "blue") return;
-    if (blueNeedsConnect(ex)) { state.blueWorkspaces = null; return render(h("div", { class: "page-head" }, h("h1", {}, "Blue")), blueFlash(), blueConnectScreen(ex.message.includes("again"))); }
-    render(h("div", { class: "empty" }, h("strong", {}, "Couldn't load Blue"), ex.message,
+    if (blueNeedsConnect(ex)) { state.blueWorkspaces = null; return render(h("div", { class: "page-head" }, h("h1", {}, "To do")), blueFlash(), blueConnectScreen(ex.message.includes("again"))); }
+    render(h("div", { class: "empty" }, h("strong", {}, "Couldn't load your to-dos"), ex.message,
       h("button", { class: "btn", onclick: () => renderBlue(true) }, "Try again")));
   }
 }
 
 async function renderBlueList(force) {
   if (!state.blueWorkspaces || force) {
-    if (!state.blueWorkspaces) render(h("p", { class: "loading" }, "Loading your Blue workspaces…"));
+    if (!state.blueWorkspaces) render(h("p", { class: "loading" }, "Loading your to-dos…"));
     state.blueWorkspaces = await api("/api/blue/workspaces");
     state.blueWorkspaces.fetched_at = new Date().toISOString();
   }
   if (state.tab !== "blue" || state.blueNav.view !== "list") return;
   const orgs = state.blueWorkspaces.organizations;
   render(
-    pageHead("Blue", state.blueWorkspaces, () => renderBlueList(true)),
+    pageHead("To do", state.blueWorkspaces, () => renderBlueList(true)),
     blueFlash(),
     orgs.length ? orgs.map((o) => h("section", { class: "blue-org" },
       orgs.length > 1 ? h("h2", { class: "blue-org-name" }, o.name) : null,
@@ -582,7 +582,7 @@ function renderTabbar() {
   if (state.me.role !== "admin") {
     // Contractors take no leave, so they only have their shifts (no tab bar needed).
     const claimsLabel = state.me.location_type === "offshore" ? "Claims" : "Expenses";
-    const blueTab = state.me.blue_enabled ? tab("blue", "Blue") : null;
+    const blueTab = state.me.blue_enabled ? tab("blue", "To do") : null;
     if (state.me.has_leave === false) { tabbar.replaceChildren(tab("mine", "My shifts"), tab("expenses", claimsLabel), blueTab || ""); return; }
     tabbar.replaceChildren(tab("mine", "My shifts"), tab("leave", "Leave"), tab("expenses", claimsLabel), blueTab || "");
     return;
@@ -593,7 +593,7 @@ function renderTabbar() {
     tab("leave", "Leave", pendingLeave ? h("span", { class: "badge" }, pendingLeave) : null),
     tab("team", "Team"),
     tab("issues", "Issues", errors ? h("span", { class: "badge" }, errors) : null),
-    state.me.blue_enabled ? tab("blue", "Blue") : "",
+    state.me.blue_enabled ? tab("blue", "To do") : "",
   );
 }
 

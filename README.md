@@ -331,9 +331,9 @@ The wording of the terms is `TERMS` in `app/api/keys.py`.
 
 ## Blue
 
-Each staff member connects **their own** Blue account once: in the **Blue** tab, or **My details → Blue**. They approve it in Blue and aren't asked again.
+Each staff member connects **their own** Blue account once: in the **To do** tab, or **My details → Blue**. They approve it in Blue and aren't asked again.
 
-**The Blue tab** shows every Blue workspace the person is a member of, grouped by organisation:
+**The To do tab** shows every Blue workspace the person is a member of, grouped by organisation:
 - tap a workspace to see its records as a board, one column per list (swipe sideways between lists);
 - tap a record to see its details, its fields, its checklists (tick or untick items) and its comments, and to post a comment.
 
@@ -346,7 +346,7 @@ Everything is drawn by this app from Blue's API. Blue's own website isn't embedd
 - **What the app may do in Blue is limited in code** (`app/blue.py`, `OPERATIONS`), because Blue grants have no scopes. It can read records, comments and checklists, add comments and tick checklist items. No deleting, archiving or workspace changes, and tests check this.
 - A board shows up to 200 records per list.
 - **Tagging:** type **@** in a comment and pick someone from the workspace's Blue members. It's sent with Blue's own mention markup, so it's a real tag and Blue notifies them. Only members of that workspace can be tagged.
-- Settings (`.env`, all optional): `BLUE_ENABLED` (`true`; `false` hides the tab), `BLUE_REDIRECT_URI` (default `https://<your domain>/api/blue/callback`).
+- Settings (`.env`, all optional): `BLUE_ENABLED` (`true`; `false` hides the To do tab), `BLUE_REDIRECT_URI` (default `https://<your domain>/api/blue/callback`).
 
 ## Still to do
 
