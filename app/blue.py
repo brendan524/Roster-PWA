@@ -37,10 +37,59 @@ log = logging.getLogger(__name__)
 TIMEOUT = 20
 REFRESH_MARGIN = timedelta(minutes=5)
 
-# The only GraphQL this app sends to Blue. Nothing here deletes, archives or changes a
-# workspace's structure, and the browser can't send queries of its own. (Tests check this.)
+# The only GraphQL this app sends to Blue: read records, comments and checklists, add a
+# comment, tick a checklist item. Nothing here deletes, archives or changes a workspace's
+# structure, and the browser can't send queries of its own. (Tests check this.)
 OPERATIONS = {
     "CurrentUser": "query CurrentUser { currentUser { id email fullName } }",
+    "Organizations": """query Organizations {
+  organizations(sort: [name_ASC], take: 100) { items { id name slug } }
+}""",
+    "Workspaces": """query Workspaces($orgIds: [String!]!) {
+  workspaceList(filter: { companyIds: $orgIds, inProject: true, archived: false, isTemplate: false },
+                sort: [position_ASC], take: 200) {
+    items { id name slug color icon company { id name } }
+  }
+}""",
+    "Board": """query Board($orgId: String!, $workspaceId: String!) {
+  workspace(id: $workspaceId) {
+    id name color company { id }
+    todoLists(orderBy: position_ASC, first: 100) { id title }
+  }
+  recordQueries {
+    todos(filter: { companyIds: [$orgId], projectIds: [$workspaceId] }, sort: [rank_ASC], limit: 500) {
+      items {
+        id title done duedAt startedAt commentCount checklistCount checklistCompletedCount
+        todoList { id }
+        tags { id title color }
+        users { id fullName }
+      }
+      pageInfo { hasNextPage totalItems }
+    }
+  }
+}""",
+    "Record": """query Record($id: String!) {
+  record(id: $id) {
+    id title text done duedAt startedAt
+    todoList { id title }
+    tags { id title color }
+    users { id fullName }
+    customFields { id name type value viewable }
+    checklistPermissions { canEditChecklistItem }
+    checklists { id title position checklistItems(orderBy: position_ASC) { id title done position } }
+  }
+  commentList(categoryId: $id, category: TODO, first: 100, orderBy: createdAt_ASC) {
+    comments { id text createdAt user { id fullName } }
+  }
+}""",
+    "AddComment": """mutation AddComment($id: String!, $html: String!, $text: String!) {
+  createComment(input: { category: TODO, categoryId: $id, html: $html, text: $text }) {
+    id text createdAt user { id fullName }
+  }
+}""",
+    "TickChecklistItem": """mutation TickChecklistItem($id: String!, $done: Boolean!) {
+  editChecklistItem(input: { checklistItemId: $id, done: $done }) { id done }
+}""",
 }
 
 
@@ -50,6 +99,10 @@ class BlueError(RuntimeError):
 
 class BlueReconnect(BlueError):
     """This person's Blue connection is gone (revoked, expired or unreadable): they need to connect again."""
+
+
+class BlueNotConnected(BlueReconnect):
+    """This person has never connected Blue (or disconnected it themselves)."""
 
 
 # ---- token encryption (key derived from the server secret, never stored in the DB) ----
@@ -201,7 +254,7 @@ def access_token(db: Session, http, staff_id: str, force_refresh: bool = False) 
     conn = db.query(BlueConnection).filter_by(staff_id=staff_id).with_for_update().first()
     if conn is None:
         db.rollback()
-        raise BlueReconnect("Blue isn't connected.")
+        raise BlueNotConnected("Blue isn't connected.")
     if not force_refresh and conn.expires_at > datetime.now(UTC) + REFRESH_MARGIN:
         token = _dec(conn.access_token_enc)
         db.commit()

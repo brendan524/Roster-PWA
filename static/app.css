@@ -179,6 +179,7 @@ a.btn { text-align: center; text-decoration: none; box-sizing: border-box; }
   cursor: pointer; position: relative;
 }
 .tabbar button[aria-current=page] { color: var(--ink); }
+.tabbar:has(button:nth-child(6)) button { font-size: 12px; padding-left: 1px; padding-right: 1px; white-space: nowrap; }
 .tabbar button[aria-current=page]::before { content: ""; position: absolute; top: 0; left: 25%; right: 25%; height: 3px; background: var(--blue); border-radius: 0 0 3px 3px; }
 .badge { display: inline-block; min-width: 18px; padding: 0 5px; margin-left: 4px; border-radius: 999px; background: var(--error); color: var(--white); font-size: 11px; line-height: 18px; }
 
@@ -374,3 +375,34 @@ table.bookings a { color: var(--blue-dark); font-weight: 700; }
 .key-terms { font-size: 14px; background: var(--bg); border-radius: 8px; padding: 10px 12px; margin: 8px 0 0; }
 .key-picks { display: grid; gap: 2px; margin: 8px 0; }
 .key-picks label.check { margin-top: 6px; }
+
+/* ---- Blue boards ---- */
+.blue-org { margin-bottom: 18px; }
+.blue-org-name { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 0 0 8px; }
+.blue-ws { display: flex; align-items: center; gap: 12px; width: 100%; text-align: left; background: var(--white); border: 0; border-radius: 12px; padding: 14px; margin-bottom: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.05); font: inherit; font-weight: 700; cursor: pointer; color: var(--ink); }
+.blue-dot { width: 12px; height: 12px; border-radius: 4px; background: var(--blue); flex: none; }
+.blue-ws-name { flex: 1; }
+.blue-chev { color: var(--muted); font-size: 20px; line-height: 1; }
+.kanban { display: flex; gap: 12px; overflow-x: auto; scroll-snap-type: x mandatory; padding-bottom: 12px; margin: 0 -16px; padding-left: 16px; padding-right: 16px; -webkit-overflow-scrolling: touch; }
+.kcol { flex: 0 0 82%; max-width: 320px; scroll-snap-align: start; background: #EAEEF1; border-radius: 12px; padding: 10px; align-self: flex-start; }
+.kcol-head { display: flex; justify-content: space-between; align-items: baseline; padding: 2px 4px 8px; }
+.kcard { display: block; width: 100%; text-align: left; background: var(--white); border: 0; border-radius: 10px; padding: 10px 12px; margin-bottom: 8px; box-shadow: 0 1px 2px rgba(0,0,0,.06); font: inherit; color: var(--ink); cursor: pointer; }
+.kcard.done .ktitle { color: var(--muted); }
+.ktitle { font-weight: 700; }
+.ktags { display: flex; flex-wrap: wrap; gap: 4px; margin-bottom: 6px; }
+.ktag { font-size: 11px; font-weight: 700; padding: 2px 8px; border-radius: 999px; background: var(--muted); color: var(--white); }
+.kmeta { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 12px; color: var(--muted); margin-top: 6px; align-items: center; }
+.blue-record { margin-top: 10px; }
+.blue-title { font-size: 20px; margin: 0; }
+.blue-desc { white-space: pre-wrap; margin: 12px 0 0; }
+.blue-fields { display: grid; grid-template-columns: minmax(90px, 40%) 1fr; gap: 6px 12px; margin: 14px 0 0; font-size: 14px; }
+.blue-fields dt { color: var(--muted); }
+.blue-fields dd { margin: 0; overflow-wrap: anywhere; }
+.blue-checklist, .blue-comments { margin-top: 14px; }
+.blue-checklist ul { list-style: none; padding: 0; margin: 8px 0 0; }
+.blue-checklist li label { display: flex; gap: 10px; align-items: flex-start; padding: 8px 0; border-top: 1px solid var(--line); }
+.blue-checklist input[type=checkbox] { width: 20px; height: 20px; flex: none; margin: 1px 0 0; accent-color: var(--blue-dark); }
+.blue-comment { border-top: 1px solid var(--line); padding: 10px 0; }
+.blue-comment p { margin: 4px 0 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.blue-comment-box { width: 100%; box-sizing: border-box; margin-top: 10px; padding: 10px 12px; border: 1.5px solid var(--line); border-radius: 10px; font: inherit; resize: vertical; }
+.blue-comments .btn { margin-top: 10px; }

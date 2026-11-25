@@ -331,14 +331,21 @@ The wording of the terms is `TERMS` in `app/api/keys.py`.
 
 ## Blue
 
-Each staff member can connect **their own** Blue account under **My details → Blue → Connect Blue**. They approve it once in Blue and aren't asked again. Boards will appear in the app later (First Aid first, then Gym).
+Each staff member connects **their own** Blue account once: in the **Blue** tab, or **My details → Blue**. They approve it in Blue and aren't asked again.
+
+**The Blue tab** shows every Blue workspace the person is a member of, grouped by organisation:
+- tap a workspace to see its records as a board, one column per list (swipe sideways between lists);
+- tap a record to see its details, its fields, its checklists (tick or untick items) and its comments, and to post a comment.
+
+Everything is drawn by this app from Blue's API. Blue's own website isn't embedded.
 
 - **Nothing to set up on the server.** Blue's OAuth 2.1 server registers the app automatically the first time someone connects, and the app remembers that registration. There's no client ID or secret to add.
-- **Every Blue call is made as that person**, with their own token, so Blue's own permissions apply, field-level rules included. Comments are posted under their name.
+- **Every Blue call is made as that person**, with their own token, so Blue's own permissions apply: they only see workspaces they belong to and fields Blue lets them view, and can only tick or comment where Blue allows. Comments are posted under their name and trigger Blue's usual notifications.
 - **Tokens stay on the server**, encrypted with a key derived from `PIN_PEPPER` (the same way as Xero). The browser never sees them. Access tokens last 24 hours and refresh silently; refresh tokens rotate each time.
 - **If a connection ends** (they removed the app in Blue under Account › Access › Connected apps, or Blue refuses a refresh), the app forgets it and shows **Reconnect Blue**. **Disconnect** in My details revokes it in Blue too.
-- **What the app may do in Blue is limited in code** (`app/blue.py`, `OPERATIONS`), because Blue grants have no scopes. Only records, comments and checklists. No deleting, archiving or workspace changes, and tests check this.
-- Settings (`.env`, all optional): `BLUE_ENABLED` (`true`), `BLUE_REDIRECT_URI` (default `https://<your domain>/api/blue/callback`).
+- **What the app may do in Blue is limited in code** (`app/blue.py`, `OPERATIONS`), because Blue grants have no scopes. It can read records, comments and checklists, add comments and tick checklist items. No deleting, archiving or workspace changes, and tests check this.
+- A board shows up to 500 records. @-tagging people in comments isn't built yet.
+- Settings (`.env`, all optional): `BLUE_ENABLED` (`true`; `false` hides the tab), `BLUE_REDIRECT_URI` (default `https://<your domain>/api/blue/callback`).
 
 ## Still to do
 

@@ -44,6 +44,7 @@ def me_payload(staff: Staff) -> dict:
         "has_leave": staff.has_leave,
         "email": staff.email,
         "location_type": staff.location_type,
+        "blue_enabled": get_settings().blue_enabled,
     }
 
 

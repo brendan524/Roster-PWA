@@ -57,6 +57,7 @@ function h(tag, attrs, ...children) {
   for (const [k, v] of Object.entries(attrs || {})) {
     if (v === false || v == null) continue;
     if (k === "class") el.className = v;
+    else if (k === "style") el.style.cssText = v;  // via the DOM: the page's CSP blocks inline style attributes
     else if (k.startsWith("on")) el.addEventListener(k.slice(2), v);
     else if (v === true) el.setAttribute(k, "");
     else el.setAttribute(k, v);
@@ -299,6 +300,183 @@ function blueCard() {
     connectBtn("Connect Blue"));
 }
 
+// ---------- Blue boards: each person's own Blue workspaces, drawn natively ----------
+// Everything comes from /api/blue/*, which calls Blue as this person. No Blue token is
+// ever in the browser, and we show exactly the fields Blue returns for them.
+
+function blueDate(iso) {
+  if (!iso) return "";
+  const d = new Date(iso);
+  return isNaN(d) ? String(iso) : d.toLocaleDateString("en-AU", { weekday: "short", day: "numeric", month: "short", year: d.getFullYear() === new Date().getFullYear() ? undefined : "numeric" });
+}
+
+function blueValue(v) {
+  if (v === null || v === undefined || v === "") return "—";
+  if (typeof v === "boolean") return v ? "✓ Yes" : "No";
+  if (typeof v === "number") return String(v);
+  if (typeof v === "string") return /^\d{4}-\d{2}-\d{2}T/.test(v) ? blueDate(v) : v;
+  if (Array.isArray(v)) return v.length ? v.map(blueValue).join(", ") : "—";
+  if (typeof v === "object") {
+    if (v.startDate || v.endDate) return [blueDate(v.startDate), blueDate(v.endDate)].filter(Boolean).join(" – ") || "—";
+    for (const k of ["title", "name", "fullName", "text", "value", "label", "url", "email"]) if (v[k] != null && v[k] !== "") return blueValue(v[k]);
+    return Object.values(v).filter((x) => x != null && typeof x !== "object").join(", ") || "—";
+  }
+  return String(v);
+}
+
+// Colours come from Blue: only accept plain hex / rgb() values.
+function blueBg(c) { return c && /^(#[0-9a-fA-F]{3,8}|rgba?\([\d\s.,%]+\))$/.test(c) ? `background:${c}` : ""; }
+
+function blueNeedsConnect(ex) { return ex && ex.status === 409; }
+
+function blueConnectScreen(reconnect) {
+  return h("div", { class: "card account" }, h("b", {}, "Blue"),
+    h("p", {}, reconnect ? "Your Blue connection has ended (it may have been removed in Blue). Connect again to see your boards."
+      : "Connect your Blue account once to see your Blue workspaces here."),
+    h("a", { class: "btn", style: "margin-top:10px", href: "/api/blue/connect" }, reconnect ? "Reconnect Blue" : "Connect Blue"));
+}
+
+function blueFlash() {
+  const m = state.blueMsg; state.blueMsg = null;
+  return m ? h("p", { class: `clock-msg ${m[0]}`, role: "status" }, m[1]) : null;
+}
+
+function blueGo(nav) { state.blueNav = nav; window.scrollTo(0, 0); renderBlue(); }
+
+async function renderBlue(force) {
+  const nav = state.blueNav || { view: "list" };
+  banner.hidden = true;
+  try {
+    if (nav.view === "record") return await renderBlueRecord(nav, force);
+    if (nav.view === "board") return await renderBlueBoard(nav, force);
+    return await renderBlueList(force);
+  } catch (ex) {
+    if (state.tab !== "blue") return;
+    if (blueNeedsConnect(ex)) { state.blueWorkspaces = null; return render(h("div", { class: "page-head" }, h("h1", {}, "Blue")), blueFlash(), blueConnectScreen(ex.message.includes("again"))); }
+    render(h("div", { class: "empty" }, h("strong", {}, "Couldn't load Blue"), ex.message,
+      h("button", { class: "btn", onclick: () => renderBlue(true) }, "Try again")));
+  }
+}
+
+async function renderBlueList(force) {
+  if (!state.blueWorkspaces || force) {
+    if (!state.blueWorkspaces) render(h("p", { class: "loading" }, "Loading your Blue workspaces…"));
+    state.blueWorkspaces = await api("/api/blue/workspaces");
+    state.blueWorkspaces.fetched_at = new Date().toISOString();
+  }
+  if (state.tab !== "blue" || state.blueNav.view !== "list") return;
+  const orgs = state.blueWorkspaces.organizations;
+  render(
+    pageHead("Blue", state.blueWorkspaces, () => renderBlueList(true)),
+    blueFlash(),
+    orgs.length ? orgs.map((o) => h("section", { class: "blue-org" },
+      orgs.length > 1 ? h("h2", { class: "blue-org-name" }, o.name) : null,
+      o.workspaces.map((w) => h("button", { class: "blue-ws", onclick: () => blueGo({ view: "board", org: o.id, ws: w.id, name: w.name }) },
+        h("span", { class: "blue-dot", style: blueBg(w.color) }),
+        h("span", { class: "blue-ws-name" }, w.name), h("span", { class: "blue-chev" }, "›")))))
+      : h("div", { class: "empty" }, h("strong", {}, "No workspaces yet"), "You aren't a member of any Blue workspaces."),
+  );
+}
+
+async function renderBlueBoard(nav, force) {
+  let b = state.blueBoards[nav.ws];
+  if (!b || force) {
+    if (!b) render(blueBack("‹ All workspaces", { view: "list" }), h("p", { class: "loading" }, `Loading ${nav.name}…`));
+    b = await api(`/api/blue/workspaces/${encodeURIComponent(nav.org)}/${encodeURIComponent(nav.ws)}`);
+    b.fetched_at = new Date().toISOString();
+    state.blueBoards[nav.ws] = b;
+  }
+  if (state.tab !== "blue" || state.blueNav.view !== "board" || state.blueNav.ws !== nav.ws) return;
+  const cols = b.columns.filter((c) => c.records.length || c.id);
+  render(
+    blueBack("‹ All workspaces", { view: "list" }),
+    pageHead(b.name, b, () => renderBlueBoard(nav, true)),
+    b.truncated ? h("p", { class: "hint" }, "Showing the first 500 records.") : null,
+    cols.length ? h("div", { class: "kanban" }, cols.map((c) => h("section", { class: "kcol" },
+      h("div", { class: "kcol-head" }, h("b", {}, c.title), h("span", { class: "meta" }, String(c.records.length))),
+      c.records.length ? c.records.map((r) => blueCardEl(r, nav)) : h("p", { class: "hint" }, "Nothing here.")))) :
+      h("div", { class: "empty" }, h("strong", {}, "No records"), "This workspace is empty."),
+  );
+}
+
+function blueCardEl(r, nav) {
+  const [doneN, totalN] = r.checklist;
+  return h("button", { class: `kcard${r.done ? " done" : ""}`, onclick: () => blueGo({ view: "record", id: r.id, back: nav }) },
+    r.tags.length ? h("div", { class: "ktags" }, r.tags.map((t) => h("span", { class: "ktag", style: blueBg(t.color) }, t.title))) : null,
+    h("div", { class: "ktitle" }, r.done ? "✓ " : "", r.title),
+    h("div", { class: "kmeta" },
+      r.due ? h("span", {}, "📅 ", blueDate(r.due)) : null,
+      totalN ? h("span", {}, `☑ ${doneN}/${totalN}`) : null,
+      r.comments ? h("span", {}, `💬 ${r.comments}`) : null,
+      r.people.length ? h("span", {}, "👤 ", r.people.join(", ")) : null));
+}
+
+function blueBack(label, nav) {
+  return h("button", { class: "link-btn dark", onclick: () => blueGo(nav) }, label);
+}
+
+async function renderBlueRecord(nav, force) {
+  let r = state.blueRecords[nav.id];
+  const back = nav.back ? blueBack(`‹ ${nav.back.name}`, nav.back) : blueBack("‹ All workspaces", { view: "list" });
+  if (!r || force) {
+    if (!r) render(back, h("p", { class: "loading" }, "Loading…"));
+    r = await api(`/api/blue/records/${encodeURIComponent(nav.id)}`);
+    state.blueRecords[nav.id] = r;
+  }
+  if (state.tab !== "blue" || state.blueNav.view !== "record" || state.blueNav.id !== nav.id) return;
+  const msg = h("p", { class: "form-error", hidden: true, role: "alert" });
+  const fail = (ex) => {
+    if (blueNeedsConnect(ex)) return renderBlue();
+    msg.textContent = ex.message; msg.hidden = false;
+  };
+  const changed = () => { if (nav.back) delete state.blueBoards[nav.back.ws]; };  // board counts are now stale
+
+  const box = h("textarea", { class: "blue-comment-box", rows: 3, placeholder: "Write a comment…", maxlength: 5000 });
+  const post = h("button", { class: "btn", type: "submit" }, "Post comment");
+
+  render(
+    back,
+    h("article", { class: "card blue-record" },
+      h("h1", { class: "blue-title" }, r.done ? "✓ " : "", r.title),
+      h("div", { class: "kmeta" },
+        r.list ? h("span", { class: "pill" }, r.list) : null,
+        r.start ? h("span", {}, "Starts ", blueDate(r.start)) : null,
+        r.due ? h("span", {}, "📅 ", blueDate(r.due)) : null,
+        r.people.length ? h("span", {}, "👤 ", r.people.join(", ")) : null),
+      r.tags.length ? h("div", { class: "ktags", style: "margin-top:8px" }, r.tags.map((t) => h("span", { class: "ktag", style: blueBg(t.color) }, t.title))) : null,
+      r.description ? h("p", { class: "blue-desc" }, r.description) : null,
+      r.fields.length ? h("dl", { class: "blue-fields" }, r.fields.map((f) => [h("dt", {}, f.name), h("dd", {}, blueValue(f.value))])) : null,
+    ),
+    msg,
+    r.checklists.map((c) => h("section", { class: "card blue-checklist" },
+      h("b", {}, c.title),
+      h("ul", {}, c.items.map((i) => {
+        const box = h("input", { type: "checkbox", checked: i.done, disabled: !r.can_tick, onchange: async () => {
+          box.disabled = true; msg.hidden = true;
+          try { const res = await api(`/api/blue/checklist-items/${encodeURIComponent(i.id)}`, { method: "POST", body: { done: box.checked } }); i.done = res.done; changed(); }
+          catch (ex) { box.checked = i.done; fail(ex); }
+          box.disabled = !r.can_tick;
+        } });
+        return h("li", {}, h("label", {}, box, h("span", {}, i.title)));
+      })),
+      r.can_tick ? null : h("p", { class: "hint" }, "Blue doesn't let you tick items on this record."))),
+    h("section", { class: "card blue-comments" },
+      h("b", {}, `Comments (${r.comments.length})`),
+      r.comments.length ? r.comments.map((c) => h("div", { class: "blue-comment" },
+        h("div", { class: "meta" }, h("b", {}, c.author || "Someone"), " · ", blueDate(c.at), " ", new Date(c.at).toLocaleTimeString("en-AU", { hour: "numeric", minute: "2-digit" })),
+        h("p", {}, c.text))) : h("p", { class: "hint" }, "No comments yet."),
+      h("form", { onsubmit: async (e) => {
+        e.preventDefault(); msg.hidden = true;
+        if (!box.value.trim()) return;
+        post.disabled = true;
+        try {
+          const c = await api(`/api/blue/records/${encodeURIComponent(r.id)}/comments`, { method: "POST", body: { text: box.value } });
+          r.comments.push(c); changed(); renderBlueRecord(nav);
+        } catch (ex) { post.disabled = false; fail(ex); }
+      } }, box, post)),
+  );
+}
+
 // ---------- chrome ----------
 
 function setChrome(loggedIn) {
@@ -322,8 +500,9 @@ function renderTabbar() {
   if (state.me.role !== "admin") {
     // Contractors take no leave, so they only have their shifts (no tab bar needed).
     const claimsLabel = state.me.location_type === "offshore" ? "Claims" : "Expenses";
-    if (state.me.has_leave === false) { tabbar.replaceChildren(tab("mine", "My shifts"), tab("expenses", claimsLabel)); return; }
-    tabbar.replaceChildren(tab("mine", "My shifts"), tab("leave", "Leave"), tab("expenses", claimsLabel));
+    const blueTab = state.me.blue_enabled ? tab("blue", "Blue") : null;
+    if (state.me.has_leave === false) { tabbar.replaceChildren(tab("mine", "My shifts"), tab("expenses", claimsLabel), blueTab || ""); return; }
+    tabbar.replaceChildren(tab("mine", "My shifts"), tab("leave", "Leave"), tab("expenses", claimsLabel), blueTab || "");
     return;
   }
   tabbar.replaceChildren(
@@ -332,6 +511,7 @@ function renderTabbar() {
     tab("leave", "Leave", pendingLeave ? h("span", { class: "badge" }, pendingLeave) : null),
     tab("team", "Team"),
     tab("issues", "Issues", errors ? h("span", { class: "badge" }, errors) : null),
+    state.me.blue_enabled ? tab("blue", "Blue") : "",
   );
 }
 
@@ -2040,6 +2220,8 @@ async function route() {
       renderExpenses();
     } else if (state.tab === "account") {
       renderAccount();
+    } else if (state.tab === "blue") {
+      await renderBlue();
     } else if (state.tab === "clock") {
       if (!state.clockData) { render(h("p", { class: "loading" }, "Loading clock-ins…")); await loadClockDay(state.clockDay); }
       renderClock();
@@ -2067,6 +2249,7 @@ async function start() {
   state.staffList = null; state.staffReveal = null; state.newPin = null; state.pay = null; state.venues = null;
   state.expenses = null; state.expensesAdmin = null; state.expenseFormOpen = false; state.expenseMsg = null; state.leaveView = "leave";
   state.incentiveDraft = null; state.keys = null; state.myKeys = null; state.blue = undefined;
+  state.blueNav = { view: "list" }; state.blueWorkspaces = null; state.blueBoards = {}; state.blueRecords = {};
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
   if (xeroReturn && state.me.role === "admin") {
@@ -2074,14 +2257,12 @@ async function start() {
     state.leaveMsg = { connected: "Xero connected. Onshore balances are syncing.", cancelled: "Xero connection was cancelled.",
       failed: "Couldn't connect to Xero. Please try again." }[xeroReturn] || null;
   }
-  if (blueReturn) {
-    state.accountMsg = { connected: "Blue connected.", cancelled: "Blue connection was cancelled.",
-      failed: "Couldn't connect Blue. Please try again." }[blueReturn] || null;
-    state.blue = undefined;
-    renderAccount();
-  } else {
-    await route();
+  if (blueReturn && state.me.blue_enabled) {  // back from Blue's sign-in: go straight to the Blue tab
+    state.tab = "blue";
+    state.blueMsg = { connected: ["ok", "Blue connected."], cancelled: ["warn", "Blue connection was cancelled."],
+      failed: ["error", "Couldn't connect Blue. Please try again."] }[blueReturn] || null;
   }
+  await route();
   flushMine();
   if (state.me.role === "admin") {
     loadAdmin().then(renderTabbar).catch(() => {});

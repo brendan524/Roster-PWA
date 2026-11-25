@@ -4,12 +4,15 @@ No Blue token or secret is ever sent to the browser; it only learns whether the 
 connected and the name on their Blue account.
 """
 
+import html
 import logging
+import re
 import secrets
 
 import requests
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import RedirectResponse
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app import blue
@@ -107,3 +110,121 @@ def disconnect(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db
     _enabled()
     blue.disconnect(db, http, staff.staff_id)
     return {"ok": True}
+
+
+# ---- boards (read records, comments, checklists; add comments; tick checklist items) ----
+# Everything runs as the signed-in person with their own token, so Blue decides what they
+# can see and do. IDs from the browser are only passed on to Blue, which checks them.
+
+ID = re.compile(r"^[A-Za-z0-9_-]{1,64}$")
+RECONNECT = 409  # "connect Blue again" (not 401, which would log them out of this app)
+
+
+def _id(value: str) -> str:
+    if not ID.match(value or ""):
+        raise HTTPException(400, "That doesn't look like a Blue ID.")
+    return value
+
+
+def _run(db: Session, http, staff: Staff, op: str, variables: dict | None = None, headers: dict | None = None) -> dict:
+    _enabled()
+    try:
+        return blue.call(db, http, staff.staff_id, op, variables, headers)
+    except blue.BlueNotConnected:
+        raise HTTPException(RECONNECT, "Connect Blue to see your boards.") from None
+    except blue.BlueReconnect:
+        raise HTTPException(RECONNECT, "Please connect Blue again.") from None
+    except blue.BlueError as e:
+        raise HTTPException(502, str(e)) from None
+
+
+@router.get("/workspaces")
+def workspaces(staff: Staff = Depends(ready_staff), db: Session = Depends(get_db), http=Depends(get_http)):
+    """Every workspace this person is a member of in Blue, grouped by organisation."""
+    orgs = _run(db, http, staff, "Organizations")["organizations"]["items"]
+    if not orgs:
+        return {"organizations": []}
+    items = _run(db, http, staff, "Workspaces", {"orgIds": [o["id"] for o in orgs]})["workspaceList"]["items"]
+    by_org: dict[str, list] = {}
+    for w in items:
+        by_org.setdefault(w["company"]["id"], []).append(
+            {"id": w["id"], "name": w["name"], "color": w.get("color"), "icon": w.get("icon")})
+    return {"organizations": [{"id": o["id"], "name": o["name"], "workspaces": by_org[o["id"]]}
+                              for o in orgs if by_org.get(o["id"])]}
+
+
+@router.get("/workspaces/{org_id}/{workspace_id}")
+def board(org_id: str, workspace_id: str, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db),
+          http=Depends(get_http)):
+    """A workspace's records, grouped into its lists (board columns)."""
+    org_id, workspace_id = _id(org_id), _id(workspace_id)
+    data = _run(db, http, staff, "Board", {"orgId": org_id, "workspaceId": workspace_id},
+                headers={"blue-org-id": org_id, "blue-workspace-id": workspace_id})
+    ws, todos = data["workspace"], data["recordQueries"]["todos"]
+    columns = [{"id": l["id"], "title": l["title"], "records": []} for l in ws.get("todoLists") or []]
+    col = {c["id"]: c for c in columns}
+    other = {"id": "", "title": "No list", "records": []}
+    for r in todos["items"]:
+        (col.get((r.get("todoList") or {}).get("id")) or other)["records"].append({
+            "id": r["id"], "title": r["title"], "done": r["done"], "due": r.get("duedAt"), "start": r.get("startedAt"),
+            "comments": r.get("commentCount", 0), "checklist": [r.get("checklistCompletedCount", 0), r.get("checklistCount", 0)],
+            "tags": [{"title": t["title"], "color": t.get("color")} for t in r.get("tags") or []],
+            "people": [u["fullName"] for u in r.get("users") or []],
+        })
+    if other["records"]:
+        columns.append(other)
+    return {"id": ws["id"], "name": ws["name"], "color": ws.get("color"), "columns": columns,
+            "truncated": bool(todos["pageInfo"].get("hasNextPage"))}
+
+
+def _comment_out(c: dict) -> dict:
+    return {"id": c["id"], "text": c.get("text") or "", "at": c["createdAt"],
+            "author": (c.get("user") or {}).get("fullName") or ""}
+
+
+@router.get("/records/{record_id}")
+def record(record_id: str, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db), http=Depends(get_http)):
+    """One record: its fields, checklists and comments, exactly as Blue lets this person see them."""
+    data = _run(db, http, staff, "Record", {"id": _id(record_id)})
+    r = data["record"]
+    return {
+        "id": r["id"], "title": r["title"], "description": r.get("text") or "", "done": r["done"],
+        "due": r.get("duedAt"), "start": r.get("startedAt"), "list": (r.get("todoList") or {}).get("title"),
+        "tags": [{"title": t["title"], "color": t.get("color")} for t in r.get("tags") or []],
+        "people": [u["fullName"] for u in r.get("users") or []],
+        # Blue's own per-person flag: a field this person may not view isn't shown.
+        "fields": [{"id": f["id"], "name": f["name"], "type": f["type"], "value": f.get("value")}
+                   for f in r.get("customFields") or [] if f.get("viewable") is not False],
+        "can_tick": bool((r.get("checklistPermissions") or {}).get("canEditChecklistItem")),
+        "checklists": [{"id": c["id"], "title": c["title"],
+                        "items": [{"id": i["id"], "title": i["title"], "done": i["done"]} for i in c.get("checklistItems") or []]}
+                       for c in sorted(r.get("checklists") or [], key=lambda c: c.get("position") or 0)],
+        "comments": [_comment_out(c) for c in (data.get("commentList") or {}).get("comments") or []],
+    }
+
+
+class CommentIn(BaseModel):
+    text: str = Field(min_length=1, max_length=5000)
+
+
+@router.post("/records/{record_id}/comments")
+def add_comment(record_id: str, body: CommentIn, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db),
+                http=Depends(get_http)):
+    """Post a comment as this person (Blue records them as the author and sends its usual notifications)."""
+    text = body.text.strip()
+    if not text:
+        raise HTTPException(400, "Write a comment first.")
+    markup = "".join(f"<p>{html.escape(line)}</p>" for line in text.split("\n"))
+    c = _run(db, http, staff, "AddComment", {"id": _id(record_id), "html": markup, "text": text})["createComment"]
+    return _comment_out(c)
+
+
+class TickIn(BaseModel):
+    done: bool
+
+
+@router.post("/checklist-items/{item_id}")
+def tick(item_id: str, body: TickIn, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db),
+         http=Depends(get_http)):
+    item = _run(db, http, staff, "TickChecklistItem", {"id": _id(item_id), "done": body.done})["editChecklistItem"]
+    return {"id": item["id"], "done": item["done"]}
