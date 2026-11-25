@@ -413,14 +413,14 @@ async function renderBlueBoard(nav, force) {
     b.truncated ? h("p", { class: "hint" }, "Some records aren't shown (over 200 in a list). Open Blue to see them all.") : null,
     cols.length ? h("div", { class: "kanban" }, cols.map((c) => h("section", { class: "kcol" },
       h("div", { class: "kcol-head" }, h("b", {}, c.title), h("span", { class: "meta" }, String(c.records.length))),
-      c.records.length ? c.records.map((r) => blueCardEl(r, nav)) : h("p", { class: "hint" }, "Nothing here.")))) :
+      c.records.length ? c.records.map((r) => blueCardEl(r, nav, b.database_id)) : h("p", { class: "hint" }, "Nothing here.")))) :
       h("div", { class: "empty" }, h("strong", {}, "No records"), "This workspace is empty."),
   );
 }
 
-function blueCardEl(r, nav) {
+function blueCardEl(r, nav, databaseId) {
   const [doneN, totalN] = r.checklist;
-  return h("button", { class: `kcard${r.done ? " done" : ""}`, onclick: () => blueGo({ view: "record", id: r.id, back: nav }) },
+  return h("button", { class: `kcard${r.done ? " done" : ""}`, onclick: () => blueGo({ view: "record", id: r.id, back: nav, db: databaseId || "" }) },
     r.tags.length ? h("div", { class: "ktags" }, r.tags.map((t) => h("span", { class: "ktag", style: blueBg(t.color) }, t.title))) : null,
     h("div", { class: "ktitle" }, r.done ? "✓ " : "", r.title),
     h("div", { class: "kmeta" },
@@ -434,12 +434,18 @@ function blueBack(label, nav) {
   return h("button", { class: "link-btn dark", onclick: () => blueGo(nav) }, label);
 }
 
+// Record calls go through the record's workspace (Blue needs it to check permissions).
+function blueWsPath(nav) {
+  const ws = nav.back || {};
+  return `/api/blue/workspaces/${encodeURIComponent(ws.org || "")}/${encodeURIComponent(ws.ws || "")}`;
+}
+
 async function renderBlueRecord(nav, force) {
   let r = state.blueRecords[nav.id];
   const back = nav.back ? blueBack(`‹ ${nav.back.name}`, nav.back) : blueBack("‹ All workspaces", { view: "list" });
   if (!r || force) {
     if (!r) render(back, h("p", { class: "loading" }, "Loading…"));
-    r = await api(`/api/blue/records/${encodeURIComponent(nav.id)}`);
+    r = await api(`${blueWsPath(nav)}/records/${encodeURIComponent(nav.id)}?db_id=${encodeURIComponent(nav.db || "")}`);
     state.blueRecords[nav.id] = r;
   }
   if (state.tab !== "blue" || state.blueNav.view !== "record" || state.blueNav.id !== nav.id) return;
@@ -467,12 +473,14 @@ async function renderBlueRecord(nav, force) {
       r.fields.length ? h("dl", { class: "blue-fields" }, r.fields.map((f) => [h("dt", {}, f.name), h("dd", {}, blueValue(f.value))])) : null,
     ),
     msg,
+    r.missing && r.missing.length ? h("p", { class: "clock-msg warn" },
+      `Blue didn't share this record's ${r.missing.join(" and ")} with you.`) : null,
     r.checklists.map((c) => h("section", { class: "card blue-checklist" },
       h("b", {}, c.title),
       h("ul", {}, c.items.map((i) => {
         const box = h("input", { type: "checkbox", checked: i.done, disabled: !r.can_tick, onchange: async () => {
           box.disabled = true; msg.hidden = true;
-          try { const res = await api(`/api/blue/checklist-items/${encodeURIComponent(i.id)}`, { method: "POST", body: { done: box.checked } }); i.done = res.done; changed(); }
+          try { const res = await api(`${blueWsPath(nav)}/checklist-items/${encodeURIComponent(i.id)}`, { method: "POST", body: { done: box.checked } }); i.done = res.done; changed(); }
           catch (ex) { box.checked = i.done; fail(ex); }
           box.disabled = !r.can_tick;
         } });
@@ -489,7 +497,7 @@ async function renderBlueRecord(nav, force) {
         if (!box.value.trim()) return;
         post.disabled = true;
         try {
-          const c = await api(`/api/blue/records/${encodeURIComponent(r.id)}/comments`, { method: "POST", body: { text: box.value } });
+          const c = await api(`${blueWsPath(nav)}/records/${encodeURIComponent(r.id)}/comments`, { method: "POST", body: { text: box.value } });
           r.comments.push(c); changed(); renderBlueRecord(nav);
         } catch (ex) { post.disabled = false; fail(ex); }
       } }, box, post)),

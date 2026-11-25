@@ -64,6 +64,8 @@ class FakeBlue:
                                   {"id": "w2", "name": "Gym Tasks", "slug": "gym", "color": None, "icon": None, "company": org, "folder": gym}],
                            "u2": [{"id": "w2", "name": "Gym Tasks", "slug": "gym", "color": None, "icon": None, "company": org, "folder": gym}]}
         self.checklist_done = {"i1": False, "i2": True}
+        self.record_fields_forbidden = False
+        self.comments_forbidden = False
         self.comments = [{"id": "c1", "text": "Booked the room", "createdAt": "2026-11-20T01:00:00Z", "user": {"id": "u2", "fullName": "Dan Blue"}}]
 
     def authorize(self, url, user):
@@ -156,23 +158,44 @@ class FakeBlue:
                 return R(200, {"data": {"recordLists": [  # deliberately not in rank order
                     {"id": "l2", "title": "Tuesday ", "rank": "a1", "isDisabled": False},
                     {"id": "l3", "title": "Old", "rank": "a2", "isDisabled": True},
-                    {"id": "l1", "title": "Monday ", "rank": "a0", "isDisabled": False}]}})
+                    {"id": "l1", "title": "Monday ", "rank": "a0", "isDisabled": False}],
+                    "recordDatabases": [{"id": "db1", "name": "Records"}]}})
             if op == "ListRecords":
                 return R(200, {"data": {"recordQueries": {"todos": {"items": in_list[v["listId"]], "pageInfo": {"hasNextPage": False}}}}})
             loose = [card("r2", "Loose record", done=True)] if set(v["notListIds"]) >= {"l1", "l2"} else []
             return R(200, {"data": {"recordQueries": {"todos": {"items": loose, "pageInfo": {"hasNextPage": False}}}}})
+        # Like Blue: record reads and writes need the workspace (blue-workspace-id header).
+        if op in ("Record", "Comments", "LegacyComments", "AddComment", "TickChecklistItem") and \
+                (headers or {}).get("blue-workspace-id") not in {w["id"] for w in self.workspaces[user]}:
+            return R(200, {"errors": [{"message": "You don't have permission to perform this action.",
+                                       "extensions": {"code": "FORBIDDEN"}}], "data": None})
         if op == "Record":
             fields = [{"id": "f1", "name": "Venue", "type": "TEXT_SINGLE", "value": "Melton", "viewable": True},
                       {"id": "f2", "name": "Pay rate", "type": "CURRENCY", "value": 55, "viewable": user == "u1"}]
-            return R(200, {"data": {
-                "record": {"id": v["id"], "title": "HLTAID011 — Acme", "text": "Bring the manikins", "done": False,
-                           "duedAt": "2026-12-01T00:00:00Z", "startedAt": None, "todoList": {"id": "l1", "title": "Mon 1 Dec"},
-                           "tags": [], "users": [{"id": "u1", "fullName": "Sonya Blue"}], "customFields": fields,
-                           "checklistPermissions": {"canEditChecklistItem": user == "u1"},
-                           "checklists": [{"id": "k1", "title": "Before the course", "position": 1, "checklistItems": [
-                               {"id": "i1", "title": "Pack kit", "done": self.checklist_done["i1"], "position": 1},
-                               {"id": "i2", "title": "Confirm venue", "done": self.checklist_done["i2"], "position": 2}]}]},
-                "commentList": {"comments": self.comments}}})
+            if self.record_fields_forbidden:
+                fields = None
+            data = {"record": {"id": v["id"], "title": "HLTAID011 — Acme", "text": "Bring the manikins", "done": False,
+                               "duedAt": "2026-12-01T00:00:00Z", "startedAt": None, "todoList": {"id": "l1", "title": "Mon 1 Dec"},
+                               "tags": [], "users": [{"id": "u1", "fullName": "Sonya Blue"}], "customFields": fields,
+                               "checklistPermissions": {"canEditChecklistItem": user == "u1"},
+                               "checklists": [{"id": "k1", "title": "Before the course", "position": 1, "checklistItems": [
+                                   {"id": "i1", "title": "Pack kit", "done": self.checklist_done["i1"], "position": 1},
+                                   {"id": "i2", "title": "Confirm venue", "done": self.checklist_done["i2"], "position": 2}]}]}}
+            if self.record_fields_forbidden:
+                return R(200, {"data": data, "errors": [{"message": "no", "path": ["record", "customFields"],
+                                                         "extensions": {"code": "FORBIDDEN"}}]})
+            return R(200, {"data": data})
+        if op == "Comments":
+            if self.comments_forbidden or v["databaseId"] != "db1":
+                return R(200, {"errors": [{"message": "no", "extensions": {"code": "FORBIDDEN"}}], "data": None})
+            return R(200, {"data": {"recordComments": {"entries": [  # newest first, plus a deleted one
+                {"id": "gone", "text": "deleted", "createdAt": "2026-11-26T00:00:00Z", "deletedAt": "2026-11-26T01:00:00Z",
+                 "author": {"id": "u2", "firstName": "Dan", "lastName": "Blue"}}] + [
+                {"id": c["id"], "text": c["text"], "createdAt": c["createdAt"], "deletedAt": None,
+                 "author": {"id": c["user"]["id"], "firstName": c["user"]["fullName"].split(" ")[0],
+                            "lastName": c["user"]["fullName"].split(" ", 1)[1]}} for c in reversed(self.comments)]}}})
+        if op == "LegacyComments":
+            return R(200, {"data": {"commentList": {"comments": self.comments}}})
         if op == "AddComment":
             c = {"id": f"c{len(self.comments) + 1}", "text": v["text"], "createdAt": "2026-11-25T01:00:00Z",
                  "user": {"id": user, "fullName": self.users[user]["fullName"]}}
@@ -401,7 +424,7 @@ def test_board_groups_records_into_lists(sonya, fake):
     assert card == {"id": "r1", "title": "HLTAID011 — Acme", "done": False, "due": "2026-12-01T00:00:00Z", "start": None,
                     "comments": 1, "checklist": [1, 2], "tags": [{"title": "Onsite", "color": "#f00"}], "people": ["Sonya Blue"]}
     ops = [(op, v) for (op, v, _, _) in fake.calls if op in ("Lists", "ListRecords", "UnlistedRecords")]
-    assert ops[0] == ("Lists", {"workspaceId": "w1"})  # list reads run side by side, in any order
+    assert ops[0] == ("Lists", {"workspaceId": "w1", "workspaceKey": "w1"})  # list reads run side by side, in any order
     assert sorted(v["listId"] for op, v in ops if op == "ListRecords") == ["l1", "l2"]
     assert ops[-1] == ("UnlistedRecords", {"orgId": "o1", "workspaceId": "w1", "notListIds": ["l1", "l2"]})
     _, _, headers, user = fake.calls[-1]
@@ -420,35 +443,35 @@ def test_record_shows_only_fields_blue_lets_them_see(client, source, fake):
     add_staff("AB0004", "dan@example.com")
     login(client, "sonya@example.com")
     connect(client, fake, "u1")
-    r = client.get("/api/blue/records/r1").json()
+    r = client.get("/api/blue/workspaces/o1/w1/records/r1?db_id=db1").json()
     assert [f["name"] for f in r["fields"]] == ["Venue", "Pay rate"]
     assert r["can_tick"] is True and r["checklists"][0]["items"][0] == {"id": "i1", "title": "Pack kit", "done": False}
     assert r["comments"] == [{"id": "c1", "text": "Booked the room", "at": "2026-11-20T01:00:00Z", "author": "Dan Blue"}]
     client.post("/api/auth/logout")
     login(client, "dan@example.com")
     connect(client, fake, "u2")
-    r = client.get("/api/blue/records/r1").json()
+    r = client.get("/api/blue/workspaces/o1/w2/records/r1?db_id=db1").json()
     assert [f["name"] for f in r["fields"]] == ["Venue"]  # Blue says Dan can't view Pay rate
     assert r["can_tick"] is False
 
 
 def test_comment_is_posted_as_the_person_with_escaped_html(sonya, fake):
     connect(sonya, fake)
-    r = sonya.post("/api/blue/records/r1/comments", json={"text": "Room <b>booked</b>\nSee you there"}, headers=H)
+    r = sonya.post("/api/blue/workspaces/o1/w1/records/r1/comments", json={"text": "Room <b>booked</b>\nSee you there"}, headers=H)
     assert r.json()["author"] == "Sonya Blue" and r.json()["text"] == "Room <b>booked</b>\nSee you there"
     op, v, _, user = fake.calls[-1]
     assert op == "AddComment" and user == "u1" and v["id"] == "r1"
     assert v["html"] == "<p>Room &lt;b&gt;booked&lt;/b&gt;</p><p>See you there</p>"
-    assert sonya.post("/api/blue/records/r1/comments", json={"text": "   "}, headers=H).status_code == 400
+    assert sonya.post("/api/blue/workspaces/o1/w1/records/r1/comments", json={"text": "   "}, headers=H).status_code == 400
 
 
 def test_tick_checklist_item_writes_back(client, source, fake):
     add_staff("AB0003", "sonya@example.com")
     login(client, "sonya@example.com")
     connect(client, fake, "u1")
-    assert client.post("/api/blue/checklist-items/i1", json={"done": True}, headers=H).json() == {"id": "i1", "done": True}
+    assert client.post("/api/blue/workspaces/o1/w1/checklist-items/i1", json={"done": True}, headers=H).json() == {"id": "i1", "done": True}
     assert fake.checklist_done["i1"] is True
-    assert client.get("/api/blue/records/r1").json()["checklists"][0]["items"][0]["done"] is True
+    assert client.get("/api/blue/workspaces/o1/w1/records/r1?db_id=db1").json()["checklists"][0]["items"][0]["done"] is True
 
 
 def test_not_connected_or_revoked_is_409_reconnect(sonya, fake):
@@ -456,13 +479,49 @@ def test_not_connected_or_revoked_is_409_reconnect(sonya, fake):
     assert r.status_code == 409 and r.json()["detail"] == "Connect Blue to see your boards."
     connect(sonya, fake)
     fake.revoked_grants.update(g for (_, g) in fake.access.values())
-    r = sonya.get("/api/blue/records/r1")
+    r = sonya.get("/api/blue/workspaces/o1/w1/records/r1?db_id=db1")
     assert r.status_code == 409 and r.json()["detail"] == "Please connect Blue again."
 
 
 def test_ids_are_checked_before_going_to_blue(sonya, fake):
     connect(sonya, fake)
     n = len(fake.calls)
-    assert sonya.get("/api/blue/records/r1%22%7D").status_code == 400
-    assert sonya.post("/api/blue/checklist-items/x%20y", json={"done": True}, headers=H).status_code == 400
+    assert sonya.get("/api/blue/workspaces/o1/w1/records/r1%22%7D").status_code == 400
+    assert sonya.post("/api/blue/workspaces/o1/w1/checklist-items/x%20y", json={"done": True}, headers=H).status_code == 400
     assert len(fake.calls) == n
+
+
+def test_record_calls_name_the_workspace_and_database(sonya, fake):
+    """Blue refuses record reads that don't say which workspace they're in (the bug where every
+    record said "you don't have permission"). Every record call now carries it."""
+    connect(sonya, fake)
+    assert sonya.get("/api/blue/workspaces/o1/w1").json()["database_id"] == "db1"
+    r = sonya.get("/api/blue/workspaces/o1/w1/records/r1?db_id=db1")
+    assert r.status_code == 200 and r.json()["missing"] == []
+    for op, v, headers, _ in fake.calls:
+        if op in ("Record", "Comments", "AddComment", "TickChecklistItem"):
+            assert headers["blue-org-id"] == "o1" and headers["blue-workspace-id"] == "w1", op
+        if op in ("Record", "Comments"):
+            assert v["databaseId"] == "db1"
+    # Comments come back oldest first, without deleted ones, with the author's name.
+    assert [(c["id"], c["author"]) for c in r.json()["comments"]] == [("c1", "Dan Blue")]
+    # A workspace the person isn't in: Blue refuses, shown as a message (not a logout).
+    r = sonya.get("/api/blue/workspaces/o1/w9/records/r1?db_id=db1")
+    assert r.status_code == 502 and "permission" in r.json()["detail"]
+
+
+def test_record_still_opens_when_blue_withholds_a_part(sonya, fake):
+    connect(sonya, fake)
+    fake.record_fields_forbidden = True
+    fake.comments_forbidden = True
+    r = sonya.get("/api/blue/workspaces/o1/w1/records/r1?db_id=db1").json()
+    assert r["title"] == "HLTAID011 — Acme" and r["checklists"][0]["title"] == "Before the course"
+    assert r["fields"] == [] and r["comments"] == []
+    assert r["missing"] == ["fields", "comments"]
+
+
+def test_record_without_a_database_uses_the_older_comment_list(sonya, fake):
+    connect(sonya, fake)
+    r = sonya.get("/api/blue/workspaces/o1/w1/records/r1").json()
+    assert [c["text"] for c in r["comments"]] == ["Booked the room"]
+    assert any(op == "LegacyComments" for op, *_ in fake.calls)

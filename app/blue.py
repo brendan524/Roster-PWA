@@ -52,8 +52,9 @@ OPERATIONS = {
   }
 }""",
     # A workspace's lists (board columns), in Blue's board order.
-    "Lists": """query Lists($workspaceId: String!) {
+    "Lists": """query Lists($workspaceId: String!, $workspaceKey: ID!) {
   recordLists(projectId: $workspaceId) { id title rank isDisabled }
+  recordDatabases(workspaceId: $workspaceKey) { id name }
 }""",
     # One list's records in board order: Blue only rank-sorts within exactly one list.
     "ListRecords": """query ListRecords($orgId: String!, $workspaceId: String!, $listId: String!) {
@@ -83,8 +84,9 @@ fragment Card on Record {
   tags { id title color }
   users { id fullName }
 }""",
-    "Record": """query Record($id: String!) {
-  record(id: $id) {
+    # Read with the workspace's database: Blue's database-style workspaces expect it.
+    "Record": """query Record($id: String!, $databaseId: ID) {
+  record(id: $id, databaseId: $databaseId) {
     id title text done duedAt startedAt
     todoList { id title }
     tags { id title color }
@@ -93,6 +95,14 @@ fragment Card on Record {
     checklistPermissions { canEditChecklistItem }
     checklists { id title position checklistItems(orderBy: position_ASC) { id title done position } }
   }
+}""",
+    "Comments": """query Comments($id: ID!, $databaseId: ID!) {
+  recordComments(recordId: $id, databaseId: $databaseId, first: 100) {
+    entries { id text createdAt deletedAt author { id firstName lastName } }
+  }
+}""",
+    # For a workspace without a database (older layout).
+    "LegacyComments": """query LegacyComments($id: String!) {
   commentList(categoryId: $id, category: TODO, first: 100, orderBy: createdAt_ASC) {
     comments { id text createdAt user { id fullName } }
   }
@@ -291,7 +301,10 @@ def access_token(db: Session, http, staff_id: str, force_refresh: bool = False) 
 
 # ---- GraphQL --------------------------------------------------------------------------------
 
-def _graphql(http, token: str, op: str, variables: dict | None = None, headers: dict | None = None) -> dict:
+def _graphql(http, token: str, op: str, variables: dict | None = None, headers: dict | None = None,
+             partial: bool = False) -> dict:
+    """partial=True: if Blue returns some data alongside errors (e.g. one field it won't share
+    with this person), keep the data; the errors are listed under "_errors"."""
     if op not in OPERATIONS:
         raise ValueError(f"Unknown Blue operation {op}")
     r = http.post(get_settings().blue_api_url, timeout=TIMEOUT,
@@ -307,7 +320,14 @@ def _graphql(http, token: str, op: str, variables: dict | None = None, headers: 
     errors = body.get("errors") or []
     if any((e.get("extensions") or {}).get("code") == "UNAUTHENTICATED" for e in errors):
         raise _Unauthenticated()
+    data = body.get("data") or {}
+    if errors and partial and any(v is not None for v in data.values()):
+        data["_errors"] = [{"path": e.get("path"), "code": (e.get("extensions") or {}).get("code"),
+                            "message": str(e.get("message", ""))[:200]} for e in errors]
+        log.info("Blue %s partial result: %s", op, data["_errors"])
+        return data
     if errors:
+        log.info("Blue %s refused: %s", op, [(e.get("path"), (e.get("extensions") or {}).get("code"), str(e.get("message", ""))[:200]) for e in errors])
         codes = {(e.get("extensions") or {}).get("code") for e in errors}
         if "FORBIDDEN" in codes:
             raise BlueError("Blue says you don't have permission to do that.")
@@ -319,13 +339,14 @@ class _Unauthenticated(Exception):
     pass
 
 
-def call(db: Session, http, staff_id: str, op: str, variables: dict | None = None, headers: dict | None = None) -> dict:
+def call(db: Session, http, staff_id: str, op: str, variables: dict | None = None, headers: dict | None = None,
+         partial: bool = False) -> dict:
     """Run one of OPERATIONS as this person. If Blue rejects the token, refresh once; if it's
     still rejected (e.g. they disconnected the app in Blue), forget it so they're asked to reconnect."""
     for attempt in (0, 1):
         token = access_token(db, http, staff_id, force_refresh=attempt == 1)
         try:
-            return _graphql(http, token, op, variables, headers)
+            return _graphql(http, token, op, variables, headers, partial)
         except _Unauthenticated:
             if attempt == 1:
                 _forget(db, staff_id)

@@ -126,10 +126,11 @@ def _id(value: str) -> str:
     return value
 
 
-def _run(db: Session, http, staff: Staff, op: str, variables: dict | None = None, headers: dict | None = None) -> dict:
+def _run(db: Session, http, staff: Staff, op: str, variables: dict | None = None, headers: dict | None = None,
+         partial: bool = False) -> dict:
     _enabled()
     try:
-        return blue.call(db, http, staff.staff_id, op, variables, headers)
+        return blue.call(db, http, staff.staff_id, op, variables, headers, partial)
     except blue.BlueNotConnected:
         raise HTTPException(RECONNECT, "Connect Blue to see your boards.") from None
     except blue.BlueReconnect:
@@ -185,8 +186,9 @@ def board(org_id: str, workspace_id: str, staff: Staff = Depends(ready_staff), d
     each list is read on its own; records outside every list go in a final "No list" column."""
     org_id, workspace_id = _id(org_id), _id(workspace_id)
     hdrs = {"blue-org-id": org_id, "blue-workspace-id": workspace_id}
-    lists = [l for l in _run(db, http, staff, "Lists", {"workspaceId": workspace_id}, hdrs)["recordLists"]
-             if not l.get("isDisabled")]
+    found = _run(db, http, staff, "Lists", {"workspaceId": workspace_id, "workspaceKey": workspace_id}, hdrs, partial=True)
+    lists = [l for l in found.get("recordLists") or [] if not l.get("isDisabled")]
+    databases = found.get("recordDatabases") or []
     lists.sort(key=lambda l: l.get("rank") or "")  # opaque keys, but they order lists within one workspace
     columns, truncated = [], len(lists) > MAX_COLUMNS
     lists = lists[:MAX_COLUMNS]
@@ -206,19 +208,54 @@ def board(org_id: str, workspace_id: str, staff: Staff = Depends(ready_staff), d
     if rest["items"]:
         truncated = truncated or bool(rest["pageInfo"].get("hasNextPage"))
         columns.append({"id": "", "title": "No list" if lists else "Records", "records": [_card(r) for r in rest["items"]]})
-    return {"id": workspace_id, "columns": columns, "truncated": truncated}
+    # Records are read through the workspace's main (first) database, as Blue's app does.
+    return {"id": workspace_id, "database_id": databases[0]["id"] if databases else None,
+            "columns": columns, "truncated": truncated}
 
 
 def _comment_out(c: dict) -> dict:
-    return {"id": c["id"], "text": c.get("text") or "", "at": c["createdAt"],
-            "author": (c.get("user") or {}).get("fullName") or ""}
+    if "author" in c:  # recordComments shape
+        a = c.get("author") or {}
+        author = f"{a.get('firstName', '')} {a.get('lastName', '')}".strip()
+    else:  # commentList / createComment shape
+        author = (c.get("user") or {}).get("fullName") or ""
+    return {"id": c["id"], "text": c.get("text") or "", "at": c["createdAt"], "author": author}
 
 
-@router.get("/records/{record_id}")
-def record(record_id: str, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db), http=Depends(get_http)):
-    """One record: its fields, checklists and comments, exactly as Blue lets this person see them."""
-    data = _run(db, http, staff, "Record", {"id": _id(record_id)})
-    r = data["record"]
+def _ws_headers(org_id: str, workspace_id: str) -> dict:
+    """Blue needs the organisation and workspace for record reads and writes."""
+    return {"blue-org-id": _id(org_id), "blue-workspace-id": _id(workspace_id)}
+
+
+@router.get("/workspaces/{org_id}/{workspace_id}/records/{record_id}")
+def record(org_id: str, workspace_id: str, record_id: str, db_id: str = "", staff: Staff = Depends(ready_staff),
+           db: Session = Depends(get_db), http=Depends(get_http)):
+    """One record: its fields, checklists and comments, exactly as Blue lets this person see them.
+    If Blue won't share one part (say, the comments), the rest still shows."""
+    hdrs, rid = _ws_headers(org_id, workspace_id), _id(record_id)
+    database_id = _id(db_id) if db_id else None
+    data = _run(db, http, staff, "Record", {"id": rid, "databaseId": database_id}, hdrs, partial=True)
+    r = data.get("record")
+    if not r:
+        raise HTTPException(502, "Blue says you don't have permission to open this record.")
+    missing = []
+    if any((e.get("path") or [None, None])[1:2] == ["customFields"] for e in data.get("_errors", [])):
+        missing.append("fields")
+    if any((e.get("path") or [None, None])[1:2] == ["checklists"] for e in data.get("_errors", [])):
+        missing.append("checklists")
+    comments = None
+    try:
+        if database_id:
+            res = _run(db, http, staff, "Comments", {"id": rid, "databaseId": database_id}, hdrs)
+            entries = [c for c in (res.get("recordComments") or {}).get("entries") or [] if not c.get("deletedAt")]
+        else:
+            res = _run(db, http, staff, "LegacyComments", {"id": rid}, hdrs)
+            entries = (res.get("commentList") or {}).get("comments") or []
+        comments = sorted((_comment_out(c) for c in entries), key=lambda c: c["at"])
+    except HTTPException as e:
+        if e.status_code == RECONNECT:
+            raise
+        missing.append("comments")
     return {
         "id": r["id"], "title": r["title"], "description": r.get("text") or "", "done": r["done"],
         "due": r.get("duedAt"), "start": r.get("startedAt"), "list": (r.get("todoList") or {}).get("title"),
@@ -231,7 +268,8 @@ def record(record_id: str, staff: Staff = Depends(ready_staff), db: Session = De
         "checklists": [{"id": c["id"], "title": c["title"],
                         "items": [{"id": i["id"], "title": i["title"], "done": i["done"]} for i in c.get("checklistItems") or []]}
                        for c in sorted(r.get("checklists") or [], key=lambda c: c.get("position") or 0)],
-        "comments": [_comment_out(c) for c in (data.get("commentList") or {}).get("comments") or []],
+        "comments": comments or [],
+        "missing": missing,  # parts Blue wouldn't share with this person
     }
 
 
@@ -239,15 +277,16 @@ class CommentIn(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
 
 
-@router.post("/records/{record_id}/comments")
-def add_comment(record_id: str, body: CommentIn, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db),
-                http=Depends(get_http)):
+@router.post("/workspaces/{org_id}/{workspace_id}/records/{record_id}/comments")
+def add_comment(org_id: str, workspace_id: str, record_id: str, body: CommentIn, staff: Staff = Depends(ready_staff),
+                db: Session = Depends(get_db), http=Depends(get_http)):
     """Post a comment as this person (Blue records them as the author and sends its usual notifications)."""
     text = body.text.strip()
     if not text:
         raise HTTPException(400, "Write a comment first.")
     markup = "".join(f"<p>{html.escape(line)}</p>" for line in text.split("\n"))
-    c = _run(db, http, staff, "AddComment", {"id": _id(record_id), "html": markup, "text": text})["createComment"]
+    c = _run(db, http, staff, "AddComment", {"id": _id(record_id), "html": markup, "text": text},
+             _ws_headers(org_id, workspace_id))["createComment"]
     return _comment_out(c)
 
 
@@ -255,8 +294,9 @@ class TickIn(BaseModel):
     done: bool
 
 
-@router.post("/checklist-items/{item_id}")
-def tick(item_id: str, body: TickIn, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db),
-         http=Depends(get_http)):
-    item = _run(db, http, staff, "TickChecklistItem", {"id": _id(item_id), "done": body.done})["editChecklistItem"]
+@router.post("/workspaces/{org_id}/{workspace_id}/checklist-items/{item_id}")
+def tick(org_id: str, workspace_id: str, item_id: str, body: TickIn, staff: Staff = Depends(ready_staff),
+         db: Session = Depends(get_db), http=Depends(get_http)):
+    item = _run(db, http, staff, "TickChecklistItem", {"id": _id(item_id), "done": body.done},
+                _ws_headers(org_id, workspace_id))["editChecklistItem"]
     return {"id": item["id"], "done": item["done"]}
