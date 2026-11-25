@@ -52,6 +52,12 @@ class Settings(BaseSettings):
     xero_sync_hours: float = 6
     auto_clock_minutes: float = 5  # how often auto-clock staff get their rostered punches (0 = off)
 
+    # Blue (blue.app): each staff member connects their own account (OAuth 2.1, no secret needed)
+    blue_enabled: bool = True
+    blue_api_url: str = "https://api.blue.app/graphql"
+    blue_oauth_metadata_url: str = "https://api.blue.app/.well-known/oauth-authorization-server"
+    blue_redirect_uri: str = ""  # e.g. https://hr.abgroup.au/api/blue/callback (default: worked out per request)
+
     # Email (Google Workspace: smtp.gmail.com, a mailbox like hr@abgroup.au and its app password)
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 587

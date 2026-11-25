@@ -329,6 +329,17 @@ Mark items **Returned** or **Lost** (lost items are retired). **Team → Staff �
 in; if they still hold keys/remotes you get an alert, and the daily check lists them until they're returned.
 The wording of the terms is `TERMS` in `app/api/keys.py`.
 
+## Blue
+
+Each staff member can connect **their own** Blue account under **My details → Blue → Connect Blue**. They approve it once in Blue and aren't asked again. Boards will appear in the app later (First Aid first, then Gym).
+
+- **Nothing to set up on the server.** Blue's OAuth 2.1 server registers the app automatically the first time someone connects, and the app remembers that registration. There's no client ID or secret to add.
+- **Every Blue call is made as that person**, with their own token, so Blue's own permissions apply, field-level rules included. Comments are posted under their name.
+- **Tokens stay on the server**, encrypted with a key derived from `PIN_PEPPER` (the same way as Xero). The browser never sees them. Access tokens last 24 hours and refresh silently; refresh tokens rotate each time.
+- **If a connection ends** (they removed the app in Blue under Account › Access › Connected apps, or Blue refuses a refresh), the app forgets it and shows **Reconnect Blue**. **Disconnect** in My details revokes it in Blue too.
+- **What the app may do in Blue is limited in code** (`app/blue.py`, `OPERATIONS`), because Blue grants have no scopes. Only records, comments and checklists. No deleting, archiving or workspace changes, and tests check this.
+- Settings (`.env`, all optional): `BLUE_ENABLED` (`true`), `BLUE_REDIRECT_URI` (default `https://<your domain>/api/blue/callback`).
+
 ## Still to do
 
 - **Onboarding new staff** — an admin screen (possibly on the kiosk) to add a new employee: details,

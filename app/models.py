@@ -1,6 +1,6 @@
 from datetime import date, datetime, time
 
-from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, Numeric, String, Time, func
+from sqlalchemy import BigInteger, Boolean, Date, DateTime, Float, ForeignKey, Integer, LargeBinary, Numeric, String, Text, Time, func
 from sqlalchemy.orm import Mapped, mapped_column
 
 from app.db import Base
@@ -276,6 +276,22 @@ class EmailOutbox(Base):
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     sent_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     last_error: Mapped[str] = mapped_column(String(500), default="")
+
+
+class BlueConnection(Base):
+    """One staff member's own Blue account connection. Tokens are stored encrypted."""
+
+    __tablename__ = "blue_connections"
+
+    staff_id: Mapped[str] = mapped_column(ForeignKey("staff.staff_id", ondelete="CASCADE"), primary_key=True)
+    client_id: Mapped[str] = mapped_column(String(200))
+    access_token_enc: Mapped[str] = mapped_column(Text)
+    refresh_token_enc: Mapped[str] = mapped_column(Text)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    blue_user_id: Mapped[str] = mapped_column(String(64), default="")
+    blue_name: Mapped[str] = mapped_column(String(200), default="")
+    blue_email: Mapped[str] = mapped_column(String(254), default="")
+    connected_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
 
 class AppState(Base):

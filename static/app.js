@@ -259,10 +259,44 @@ function renderAccount() {
         h("span", { class: "meta" }, ` · signed for ${fmtDay(i.accepted_at.slice(0, 10))}`))))),
       h("p", { class: "hint" }, "Please return these when you finish working with AB Group.")) : null,
     pinCard(),
+    blueCard(),
     h("div", { class: "card account", style: "margin-top:14px" },
       h("b", {}, "Password"),
       h("button", { class: "btn secondary", style: "margin-top:10px", onclick: () => { state.accountMsg = null; renderChangePassword(true); } }, "Change password")),
   );
+}
+
+// ---------- Blue connection (each person's own Blue account; tokens stay on the server) ----------
+
+function blueCard() {
+  const b = state.blue;
+  if (b === undefined) {  // not loaded yet: fetch, then redraw just this card
+    state.blue = null;
+    api("/api/blue/status").then((d) => { state.blue = d; if (state.tab === "account") renderAccount(); })
+      .catch(() => { state.blue = { enabled: true, error: true }; if (state.tab === "account") renderAccount(); });
+  }
+  if (b && b.enabled === false) return null;
+  const card = (...kids) => h("div", { class: "card account", style: "margin-top:14px" }, h("b", {}, "Blue"), ...kids);
+  const connectBtn = (label) => h("a", { class: "btn", style: "margin-top:10px", href: "/api/blue/connect" }, label);
+  if (!b) return card(h("p", { class: "hint" }, "Checking your Blue connection…"));
+  if (b.error) return card(h("p", { class: "hint" }, "Couldn't check your Blue connection just now."),
+    h("button", { class: "btn secondary", style: "margin-top:10px", onclick: () => { state.blue = undefined; renderAccount(); } }, "Try again"));
+  if (b.connected) {
+    const off = h("button", { class: "btn secondary", style: "margin-top:10px", onclick: async () => {
+      if (!confirm("Disconnect your Blue account from the staff app?")) return;
+      off.disabled = true;
+      try { await api("/api/blue/disconnect", { method: "POST" }); state.blue = undefined; state.accountMsg = "Blue disconnected."; }
+      catch (ex) { alert(ex.message); }
+      renderAccount();
+    } }, "Disconnect");
+    return card(h("p", {}, "✅ Connected as ", h("b", {}, b.name || b.email), b.email && b.name ? h("span", { class: "meta" }, ` · ${b.email}`) : null),
+      b.warning ? h("p", { class: "hint" }, "Blue isn't answering right now — your connection is still saved.") : null,
+      off);
+  }
+  if (b.reconnect) return card(h("p", {}, "Your Blue connection has ended (it may have been removed in Blue). Connect again to keep using Blue here."),
+    connectBtn("Reconnect Blue"));
+  return card(h("p", { class: "hint" }, "Connect your Blue account once, and you'll be able to use your Blue boards here without signing in to Blue each time."),
+    connectBtn("Connect Blue"));
 }
 
 // ---------- chrome ----------
@@ -2022,6 +2056,8 @@ async function route() {
 
 const xeroReturn = new URLSearchParams(location.search).get("xero");
 if (xeroReturn) history.replaceState(null, "", "/");
+const blueReturn = new URLSearchParams(location.search).get("blue");
+if (blueReturn) history.replaceState(null, "", "/");
 
 async function start() {
   state.roster = null; state.admin = null; state.tab = "mine"; state.clockData = null; state.clockDay = null;
@@ -2030,7 +2066,7 @@ async function start() {
   state.avail = null; state.adminAvail = null; state.availDateOpen = false; state.availMsg = null; state.availAllClashes = false;
   state.staffList = null; state.staffReveal = null; state.newPin = null; state.pay = null; state.venues = null;
   state.expenses = null; state.expensesAdmin = null; state.expenseFormOpen = false; state.expenseMsg = null; state.leaveView = "leave";
-  state.incentiveDraft = null; state.keys = null; state.myKeys = null;
+  state.incentiveDraft = null; state.keys = null; state.myKeys = null; state.blue = undefined;
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
   if (xeroReturn && state.me.role === "admin") {
@@ -2038,7 +2074,14 @@ async function start() {
     state.leaveMsg = { connected: "Xero connected. Onshore balances are syncing.", cancelled: "Xero connection was cancelled.",
       failed: "Couldn't connect to Xero. Please try again." }[xeroReturn] || null;
   }
-  await route();
+  if (blueReturn) {
+    state.accountMsg = { connected: "Blue connected.", cancelled: "Blue connection was cancelled.",
+      failed: "Couldn't connect Blue. Please try again." }[blueReturn] || null;
+    state.blue = undefined;
+    renderAccount();
+  } else {
+    await route();
+  }
   flushMine();
   if (state.me.role === "admin") {
     loadAdmin().then(renderTabbar).catch(() => {});
