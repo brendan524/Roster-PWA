@@ -107,6 +107,10 @@ fragment Card on Record {
     comments { id text createdAt user { id fullName } }
   }
 }""",
+    # The workspace's members, for tagging people in comments (Blue returns at most 200).
+    "Members": """query Members($workspaceId: String!) {
+  workspaceUserList(projectId: $workspaceId) { users { id fullName } }
+}""",
     "AddComment": """mutation AddComment($id: String!, $html: String!, $text: String!) {
   createComment(input: { category: TODO, categoryId: $id, html: $html, text: $text }) {
     id text createdAt user { id fullName }

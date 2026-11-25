@@ -165,7 +165,7 @@ class FakeBlue:
             loose = [card("r2", "Loose record", done=True)] if set(v["notListIds"]) >= {"l1", "l2"} else []
             return R(200, {"data": {"recordQueries": {"todos": {"items": loose, "pageInfo": {"hasNextPage": False}}}}})
         # Like Blue: record reads and writes need the workspace (blue-workspace-id header).
-        if op in ("Record", "Comments", "LegacyComments", "AddComment", "TickChecklistItem") and \
+        if op in ("Record", "Comments", "LegacyComments", "AddComment", "TickChecklistItem", "Members") and \
                 (headers or {}).get("blue-workspace-id") not in {w["id"] for w in self.workspaces[user]}:
             return R(200, {"errors": [{"message": "You don't have permission to perform this action.",
                                        "extensions": {"code": "FORBIDDEN"}}], "data": None})
@@ -194,6 +194,13 @@ class FakeBlue:
                 {"id": c["id"], "text": c["text"], "createdAt": c["createdAt"], "deletedAt": None,
                  "author": {"id": c["user"]["id"], "firstName": c["user"]["fullName"].split(" ")[0],
                             "lastName": c["user"]["fullName"].split(" ", 1)[1]}} for c in reversed(self.comments)]}}})
+        if op == "Members":
+            ws = (headers or {}).get("blue-workspace-id")
+            if ws not in {w["id"] for w in self.workspaces[user]}:
+                return R(200, {"errors": [{"message": "no", "extensions": {"code": "FORBIDDEN"}}], "data": None})
+            members = [{"id": "u2", "fullName": "Dan Blue"}, {"id": "u3", "fullName": "Josel Omangay"},
+                       {"id": "u1", "fullName": "Sonya Blue"}]
+            return R(200, {"data": {"workspaceUserList": {"users": members}}})
         if op == "LegacyComments":
             return R(200, {"data": {"commentList": {"comments": self.comments}}})
         if op == "AddComment":
@@ -525,3 +532,34 @@ def test_record_without_a_database_uses_the_older_comment_list(sonya, fake):
     r = sonya.get("/api/blue/workspaces/o1/w1/records/r1").json()
     assert [c["text"] for c in r["comments"]] == ["Booked the room"]
     assert any(op == "LegacyComments" for op, *_ in fake.calls)
+
+
+def test_people_to_tag_are_the_workspaces_blue_members(sonya, fake):
+    connect(sonya, fake)
+    r = sonya.get("/api/blue/workspaces/o1/w1/people").json()
+    assert r == {"people": [{"id": "u2", "name": "Dan Blue"}, {"id": "u3", "name": "Josel Omangay"},
+                            {"id": "u1", "name": "Sonya Blue"}]}
+
+
+def test_tagging_someone_sends_blues_mention_markup(sonya, fake):
+    """The same markup Blue's own editor writes, so it's a real tag with Blue's notification."""
+    connect(sonya, fake)
+    r = sonya.post("/api/blue/workspaces/o1/w1/records/r1/comments", headers=H,
+                   json={"text": "@Josel Omangay can you <check> the mats? cc @Dan Blue", "tags": [{"id": "u3"}, {"id": "u2"}]})
+    assert r.status_code == 200
+    op, v, headers, user = fake.calls[-1]
+    assert op == "AddComment" and user == "u1" and headers["blue-workspace-id"] == "w1"
+    assert v["html"] == ('<p><a class="mention" data-mention-id="u3" target="_blank">@Josel Omangay</a>'
+                         ' can you &lt;check&gt; the mats? cc <a class="mention" data-mention-id="u2" target="_blank">@Dan Blue</a></p>')
+    assert v["text"] == "@Josel Omangay can you <check> the mats? cc @Dan Blue"
+
+
+def test_tags_must_be_real_members_and_still_in_the_text(sonya, fake):
+    connect(sonya, fake)
+    r = sonya.post("/api/blue/workspaces/o1/w1/records/r1/comments", headers=H,
+                   json={"text": "@Someone hi", "tags": [{"id": "not-a-member"}]})
+    assert r.status_code == 400 and "isn't in this Blue workspace" in r.json()["detail"]
+    assert not any(op == "AddComment" for op, *_ in fake.calls)
+    # Picked, then deleted from the text: no tag is sent.
+    sonya.post("/api/blue/workspaces/o1/w1/records/r1/comments", headers=H, json={"text": "never mind", "tags": [{"id": "u3"}]})
+    assert fake.calls[-1][1]["html"] == "<p>never mind</p>"

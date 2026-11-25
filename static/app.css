@@ -414,3 +414,8 @@ table.bookings a { color: var(--blue-dark); font-weight: 700; }
 .blue-folder-dot { width: 14px; height: 14px; border-radius: 4px; background: var(--muted); flex: none; }
 .blue-folder-name { flex: 1; }
 .blue-folder-body { padding-left: 12px; border-left: 3px solid var(--line); margin-left: 12px; }
+.blue-tag-list { margin-top: 6px; border: 1.5px solid var(--line); border-radius: 10px; background: var(--white); overflow: hidden; }
+.blue-tag-opt { display: block; width: 100%; text-align: left; border: 0; border-top: 1px solid var(--line); background: none; padding: 10px 12px; font: inherit; color: var(--ink); cursor: pointer; }
+.blue-tag-opt:first-child { border-top: 0; }
+.blue-tag-opt b { color: var(--blue-dark); margin-right: 2px; }
+.blue-tag-opt:hover, .blue-tag-opt:focus { background: #EAF8FE; }

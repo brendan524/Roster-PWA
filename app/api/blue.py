@@ -273,8 +273,51 @@ def record(org_id: str, workspace_id: str, record_id: str, db_id: str = "", staf
     }
 
 
+@router.get("/workspaces/{org_id}/{workspace_id}/people")
+def people(org_id: str, workspace_id: str, staff: Staff = Depends(ready_staff), db: Session = Depends(get_db),
+           http=Depends(get_http)):
+    """Who can be tagged in this workspace's comments: its members in Blue."""
+    return {"people": _members(db, http, staff, org_id, workspace_id)}
+
+
+def _members(db: Session, http, staff: Staff, org_id: str, workspace_id: str) -> list[dict]:
+    users = _run(db, http, staff, "Members", {"workspaceId": _id(workspace_id)},
+                 _ws_headers(org_id, workspace_id))["workspaceUserList"]["users"]
+    return sorted(({"id": u["id"], "name": (u.get("fullName") or "").strip()} for u in users if (u.get("fullName") or "").strip()),
+                  key=lambda u: u["name"].lower())
+
+
+def comment_html(text: str, tags: dict[str, str]) -> str:
+    """The comment as Blue's own editor writes it. Each "@Full Name" of a tagged person becomes
+    Blue's mention markup, which is what makes it a real tag (and sends Blue's notification):
+    <a class="mention" data-mention-id="USER_ID" target="_blank">@Full Name</a>
+    Everything else is escaped."""
+    names = sorted(tags.items(), key=lambda kv: -len(kv[1]))  # longest first: "@Jo Smithers" before "@Jo Smith"
+    out = []
+    for line in text.split("\n"):
+        parts, i = [], 0
+        while i < len(line):
+            for uid, name in names:
+                token = "@" + name
+                if line.startswith(token, i):
+                    parts.append(f'<a class="mention" data-mention-id="{html.escape(uid)}" target="_blank">'
+                                 f"{html.escape(token)}</a>")
+                    i += len(token)
+                    break
+            else:
+                parts.append(html.escape(line[i]))
+                i += 1
+        out.append(f"<p>{''.join(parts)}</p>")
+    return "".join(out)
+
+
+class TagIn(BaseModel):
+    id: str = Field(max_length=64)
+
+
 class CommentIn(BaseModel):
     text: str = Field(min_length=1, max_length=5000)
+    tags: list[TagIn] = Field(default_factory=list, max_length=20)
 
 
 @router.post("/workspaces/{org_id}/{workspace_id}/records/{record_id}/comments")
@@ -284,7 +327,16 @@ def add_comment(org_id: str, workspace_id: str, record_id: str, body: CommentIn,
     text = body.text.strip()
     if not text:
         raise HTTPException(400, "Write a comment first.")
-    markup = "".join(f"<p>{html.escape(line)}</p>" for line in text.split("\n"))
+    tags = {}
+    if body.tags:
+        # Only real members of this workspace can be tagged, under their Blue name.
+        members = {m["id"]: m["name"] for m in _members(db, http, staff, org_id, workspace_id)}
+        for t in body.tags:
+            if t.id not in members:
+                raise HTTPException(400, "Someone you tagged isn't in this Blue workspace.")
+            if "@" + members[t.id] in text:
+                tags[t.id] = members[t.id]
+    markup = comment_html(text, tags)
     c = _run(db, http, staff, "AddComment", {"id": _id(record_id), "html": markup, "text": text},
              _ws_headers(org_id, workspace_id))["createComment"]
     return _comment_out(c)

@@ -456,8 +456,9 @@ async function renderBlueRecord(nav, force) {
   };
   const changed = () => { if (nav.back) delete state.blueBoards[nav.back.ws]; };  // board counts are now stale
 
-  const box = h("textarea", { class: "blue-comment-box", rows: 3, placeholder: "Write a comment…", maxlength: 5000 });
+  const box = h("textarea", { class: "blue-comment-box", rows: 3, placeholder: "Write a comment… type @ to tag someone", maxlength: 5000 });
   const post = h("button", { class: "btn", type: "submit" }, "Post comment");
+  const tagger = blueTagger(box, nav);
 
   render(
     back,
@@ -497,11 +498,65 @@ async function renderBlueRecord(nav, force) {
         if (!box.value.trim()) return;
         post.disabled = true;
         try {
-          const c = await api(`${blueWsPath(nav)}/records/${encodeURIComponent(r.id)}/comments`, { method: "POST", body: { text: box.value } });
+          const c = await api(`${blueWsPath(nav)}/records/${encodeURIComponent(r.id)}/comments`,
+            { method: "POST", body: { text: box.value, tags: tagger.tags() } });
           r.comments.push(c); changed(); renderBlueRecord(nav);
         } catch (ex) { post.disabled = false; fail(ex); }
-      } }, box, post)),
+      } }, box, tagger.list, post)),
   );
+}
+
+// @-tagging: typing @ shows the workspace's Blue members; picking one puts "@Full Name" in
+// the comment and remembers who it is, so the server can send it as a real Blue tag.
+function blueTagger(box, nav) {
+  const picked = new Map();  // Blue user id -> name
+  const list = h("div", { class: "blue-tag-list", hidden: true, role: "listbox" });
+  const ws = nav.back ? nav.back.ws : "";
+  const load = () => {
+    state.bluePeople = state.bluePeople || {};
+    if (!state.bluePeople[ws]) {
+      state.bluePeople[ws] = api(`${blueWsPath(nav)}/people`).then((d) => d.people)
+        .catch((ex) => { delete state.bluePeople[ws]; throw ex; });
+    }
+    return state.bluePeople[ws];
+  };
+  const query = () => {
+    const before = box.value.slice(0, box.selectionStart);
+    const m = before.match(/(^|\s)@([^@\n]{0,40})$/);
+    return m ? { start: before.length - m[2].length - 1, text: m[2].toLowerCase() } : null;
+  };
+  const update = async () => {
+    const q = query();
+    if (!q) { list.hidden = true; return; }
+    let people;
+    try { people = await load(); } catch { list.hidden = true; return; }
+    const now = query();
+    if (!now || now.text !== q.text) return;  // they kept typing
+    const words = q.text.trim().split(/\s+/).filter(Boolean);
+    const hits = people.filter((p) => words.every((w) => p.name.toLowerCase().split(/\s+/).some((n) => n.startsWith(w))) || p.name.toLowerCase().startsWith(q.text)).slice(0, 6);
+    if (!hits.length) { list.hidden = true; return; }
+    list.replaceChildren(...hits.map((p) => h("button", { type: "button", class: "blue-tag-opt", role: "option",
+      onmousedown: (e) => e.preventDefault(),  // keep the keyboard up
+      onclick: () => {
+        const at = query() || q;
+        const tag = `@${p.name} `;
+        box.value = box.value.slice(0, at.start) + tag + box.value.slice(box.selectionStart);
+        const caret = at.start + tag.length;
+        box.setSelectionRange(caret, caret);
+        picked.set(p.id, p.name);
+        list.hidden = true;
+        box.focus();
+      } }, h("b", {}, "@"), p.name)));
+    list.hidden = false;
+  };
+  box.addEventListener("input", update);
+  box.addEventListener("click", update);
+  box.addEventListener("blur", () => setTimeout(() => { list.hidden = true; }, 150));
+  return {
+    list,
+    // Only people still tagged in the text when it's posted.
+    tags: () => [...picked].filter(([, name]) => box.value.includes(`@${name}`)).map(([id]) => ({ id })),
+  };
 }
 
 // ---------- chrome ----------
@@ -2276,7 +2331,7 @@ async function start() {
   state.staffList = null; state.staffReveal = null; state.newPin = null; state.pay = null; state.venues = null;
   state.expenses = null; state.expensesAdmin = null; state.expenseFormOpen = false; state.expenseMsg = null; state.leaveView = "leave";
   state.incentiveDraft = null; state.keys = null; state.myKeys = null; state.blue = undefined;
-  state.blueNav = { view: "list" }; state.blueWorkspaces = null; state.blueBoards = {}; state.blueRecords = {};
+  state.blueNav = { view: "list" }; state.blueWorkspaces = null; state.blueBoards = {}; state.blueRecords = {}; state.bluePeople = {};
   if (state.me.must_change_password) return renderChangePassword();
   setChrome(true);
   if (xeroReturn && state.me.role === "admin") {
