@@ -164,7 +164,11 @@ def board(org_id: str, workspace_id: str, staff: Staff = Depends(ready_staff), d
     columns = [{"id": l["id"], "title": l["title"], "records": []} for l in ws.get("todoLists") or []]
     col = {c["id"]: c for c in columns}
     other = {"id": "", "title": "No list", "records": []}
-    for r in todos["items"]:
+    # Blue only sorts by its manual "rank" within one list, so the query spans the workspace
+    # in creation order and each column is put in board order here: rank is an opaque string
+    # compared only within its own list, highest first (Blue's top-to-bottom order).
+    items = sorted(todos["items"], key=lambda r: r.get("rank") or "", reverse=True)
+    for r in items:
         (col.get((r.get("todoList") or {}).get("id")) or other)["records"].append({
             "id": r["id"], "title": r["title"], "done": r["done"], "due": r.get("duedAt"), "start": r.get("startedAt"),
             "comments": r.get("commentCount", 0), "checklist": [r.get("checklistCompletedCount", 0), r.get("checklistCount", 0)],

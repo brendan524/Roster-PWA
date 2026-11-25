@@ -134,15 +134,21 @@ class FakeBlue:
         if op == "Workspaces":
             return R(200, {"data": {"workspaceList": {"items": [w for w in self.workspaces[user] if w["company"]["id"] in v["orgIds"]]}}})
         if op == "Board":
+            # Blue: "A rank sort must be the only sort and the filter must resolve to exactly one list."
+            if "rank_" in json["query"].split("todos(")[1].split(")")[0] and "todoListIds" not in json["query"]:
+                return R(200, {"errors": [{"message": "Rank ordering requires exactly one record list.",
+                                           "extensions": {"code": "BAD_USER_INPUT"}}]})
             if v["workspaceId"] not in {w["id"] for w in self.workspaces[user]}:
                 return R(200, {"errors": [{"message": "nope", "extensions": {"code": "FORBIDDEN"}}]})
             return R(200, {"data": {
                 "workspace": {"id": "w1", "name": "First Aid Courses", "color": "#00f", "company": {"id": "o1"},
                               "todoLists": [{"id": "l1", "title": "Mon 1 Dec"}, {"id": "l2", "title": "Tue 2 Dec"}]},
                 "recordQueries": {"todos": {"items": [
-                    {"id": "r1", "title": "HLTAID011 — Acme", "done": False, "duedAt": "2026-12-01T00:00:00Z", "startedAt": None,
+                    {"id": "r1", "rank": "0|i00000:", "title": "HLTAID011 — Acme", "done": False, "duedAt": "2026-12-01T00:00:00Z", "startedAt": None,
                      "commentCount": 1, "checklistCount": 2, "checklistCompletedCount": 1, "todoList": {"id": "l1"},
                      "tags": [{"id": "t1", "title": "Onsite", "color": "#f00"}], "users": [{"id": "u1", "fullName": "Sonya Blue"}]},
+                    {"id": "r3", "rank": "0|hzzzzz:", "title": "Second in Mon", "done": False, "duedAt": None, "startedAt": None,
+                     "commentCount": 0, "checklistCount": 0, "checklistCompletedCount": 0, "todoList": {"id": "l1"}, "tags": [], "users": []},
                     {"id": "r2", "title": "Loose record", "done": True, "duedAt": None, "startedAt": None, "commentCount": 0,
                      "checklistCount": 0, "checklistCompletedCount": 0, "todoList": None, "tags": [], "users": []},
                 ], "pageInfo": {"hasNextPage": False, "totalItems": 2}}}}})
@@ -373,6 +379,8 @@ def test_board_groups_records_into_lists(sonya, fake):
     connect(sonya, fake)
     b = sonya.get("/api/blue/workspaces/o1/w1").json()
     assert [c["title"] for c in b["columns"]] == ["Mon 1 Dec", "Tue 2 Dec", "No list"]
+    # Board order within a list = highest rank first (r3 was created later but ranks lower).
+    assert [r["id"] for r in b["columns"][0]["records"]] == ["r1", "r3"]
     card = b["columns"][0]["records"][0]
     assert card == {"id": "r1", "title": "HLTAID011 — Acme", "done": False, "due": "2026-12-01T00:00:00Z", "start": None,
                     "comments": 1, "checklist": [1, 2], "tags": [{"title": "Onsite", "color": "#f00"}], "people": ["Sonya Blue"]}

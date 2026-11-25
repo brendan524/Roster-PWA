@@ -57,9 +57,9 @@ OPERATIONS = {
     todoLists(orderBy: position_ASC, first: 100) { id title }
   }
   recordQueries {
-    todos(filter: { companyIds: [$orgId], projectIds: [$workspaceId] }, sort: [rank_ASC], limit: 500) {
+    todos(filter: { companyIds: [$orgId], projectIds: [$workspaceId] }, sort: [createdAt_ASC], limit: 500) {
       items {
-        id title done duedAt startedAt commentCount checklistCount checklistCompletedCount
+        id rank title done duedAt startedAt commentCount checklistCount checklistCompletedCount
         todoList { id }
         tags { id title color }
         users { id fullName }
